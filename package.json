@@ -1,0 +1,69 @@
+{
+  "name": "pi-mcp-bleeding-edge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Replaces pi's built-in MCP support with a client on the official MCP TypeScript SDK v2, speaking protocol 2026-07-28 and falling back to 2025-era servers.",
+  "keywords": [
+    "mcp",
+    "pi-package"
+  ],
+  "license": "MIT",
+  "files": [
+    "*.ts",
+    "config/*.ts",
+    "connection/*.ts",
+    "oauth/*.ts",
+    "tools/*.ts",
+    "manager/*.ts",
+    "docs/*.md",
+    "README.md",
+    "LICENSE",
+    "!**/*.test.ts"
+  ],
+  "type": "module",
+  "exports": "./index.ts",
+  "scripts": {
+    "prepare": "vp config"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "proper-lockfile": "4.1.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@earendil-works/pi-tui": "1.6.0",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "@types/node": "26.6.6",
+    "@types/proper-lockfile": "4.1.4",
+    "typebox": "1.4.7",
+    "typescript": "7.0.2",
+    "ultracite": "8.3.1",
+    "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8000",
+    "vite-plus": "1.7.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.18.0",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": ">=26.13.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

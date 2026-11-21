@@ -1,0 +1,23 @@
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - vite-plus
+  - "@voidzero-dev/*"
+  - oxlint
+  - "@oxlint/*"
+  - oxlint-tsgolint
+  - "@oxlint-tsgolint/*"
+  - oxfmt
+  - "@oxfmt/*"
+  - vitest
+  - "@vitest/*"
+  - "@earendil-works/*"
+saveExact: true
+peerDependencyRules:
+  allowAny:
+    - vite
+allowBuilds:
+  "@google/genai": false
+  protobufjs: false
+permissions:
+  ultracite:
+    skills: false
