@@ -1,6 +1,7 @@
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { JsonObject } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { z } from "zod";
 
 import { startSession } from "./fixtures/agent-session.ts";
 import type { SessionUnderTest } from "./fixtures/agent-session.ts";
@@ -25,6 +26,11 @@ const start = async (servers: JsonObject): Promise<SessionUnderTest> => {
 
   return subject;
 };
+
+const listing = z.object({ resources: z.array(z.object({ uri: z.string() })) });
+
+const uris = (text: string): string[] =>
+  listing.parse(JSON.parse(text)).resources.map((resource) => resource.uri);
 
 const toolResultTexts = (subject: SessionUnderTest): string[] =>
   subject.session.messages.flatMap((message) =>
@@ -99,5 +105,45 @@ describe("the extension in a pi session", () => {
 
     expect(result?.role === "toolResult" && result.isError).toBe(true);
     expect(toolResultTexts(subject)[0]).toBe("it failed");
+  });
+
+  it("lists resources a page at a time, continues with the cursor, and walks every page without a server", async () => {
+    const subject = await start({
+      paged: { ...stdioFixture("stdio-paging.ts"), exposure: "direct" },
+    });
+
+    subject.respond([
+      fauxAssistantMessage(
+        fauxToolCall("list_mcp_resources", { server: "paged" })
+      ),
+      fauxAssistantMessage(
+        fauxToolCall("list_mcp_resources", { server: "paged", cursor: "2" })
+      ),
+      fauxAssistantMessage(fauxToolCall("list_mcp_resources", {})),
+      fauxAssistantMessage(
+        fauxToolCall("read_mcp_resource", { server: "paged", uri: "paged://c" })
+      ),
+      fauxAssistantMessage("done"),
+    ]);
+
+    await subject.session.prompt("go");
+
+    const [first = "", second = "", all = "", read] = toolResultTexts(subject);
+
+    expect(uris(first)).toStrictEqual(["paged://a", "paged://b"]);
+    expect(JSON.parse(first)).toMatchObject({
+      server: "paged",
+      nextCursor: "2",
+    });
+    expect(uris(second)).toStrictEqual(["paged://c", "paged://d"]);
+    expect(uris(all)).toStrictEqual([
+      "paged://a",
+      "paged://b",
+      "paged://c",
+      "paged://d",
+      "paged://e",
+    ]);
+    expect(JSON.parse(all)).not.toHaveProperty("nextCursor");
+    expect(read).toBe("content of paged://c");
   });
 });

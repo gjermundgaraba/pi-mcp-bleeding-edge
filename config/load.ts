@@ -1,9 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
-
+import { mcpNamespace } from "@earendil-works/pi-mcp";
 import { z } from "zod";
 
+import { errorMessage } from "../connection/errors.ts";
+import { readJsonFile } from "../json-file.ts";
 import type { McpPaths } from "../paths.ts";
-import { mcpNamespace } from "../tools/naming.ts";
 import {
   configFileSchema,
   isHttpConfig,
@@ -42,13 +42,6 @@ interface LoadState {
   readonly errors: string[];
   autoEnableCodemode?: boolean;
 }
-
-/** The parsed JSON of a file, without a byte order mark. */
-const readJsonFile = (file: string): unknown =>
-  JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/u, ""));
-
-const errorText = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 const readOverride = (
   file: string,
@@ -128,17 +121,17 @@ const readConfigFile = (
   scope: "global" | "project",
   state: LoadState
 ): void => {
-  if (!existsSync(file)) {
-    return;
-  }
-
   let json: unknown;
 
   try {
     json = readJsonFile(file);
   } catch (error) {
-    state.errors.push(`${file}: ${errorText(error)}`);
+    state.errors.push(`${file}: ${errorMessage(error)}`);
 
+    return;
+  }
+
+  if (json === undefined) {
     return;
   }
 

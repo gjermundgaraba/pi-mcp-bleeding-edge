@@ -49,7 +49,7 @@ const sizeOf = (file: string): number => {
  * synchronous append, since several pi processes share the file; write errors are ignored.
  */
 export class ServerLog {
-  readonly file: string;
+  private readonly file: string;
   private size: number | undefined;
 
   constructor(file: string) {

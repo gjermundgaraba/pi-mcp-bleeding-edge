@@ -7,7 +7,7 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import { buildModernServer } from "./modern-server.ts";
+import { buildModernServer, fixtureState } from "./modern-server.ts";
 
 /** An MCP server behind a minimal OAuth 2.1 authorization server with dynamic client registration. */
 export interface OAuthFixture {
@@ -48,7 +48,7 @@ const registration = z.object({ redirect_uris: z.array(z.string()) });
 
 export const startOAuthServer = async (): Promise<OAuthFixture> => {
   const handler = createMcpHandler(() =>
-    buildModernServer({ addedTools: [] }, () => undefined)
+    buildModernServer(fixtureState(), () => undefined)
   );
 
   const mcp = toNodeHandler(handler);

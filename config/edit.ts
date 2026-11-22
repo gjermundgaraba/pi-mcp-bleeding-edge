@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 
+import { readTextFile } from "../json-file.ts";
 import type { McpExposure } from "./exposure.ts";
 import { isServerOverride } from "./schema.ts";
 
@@ -57,9 +58,6 @@ const applyPatch = (
 const indentOf = (text: string): string =>
   /^(?<indent>[ \t]+)\S/mu.exec(text)?.groups?.["indent"] ?? "  ";
 
-const readText = (file: string): string =>
-  existsSync(file) ? readFileSync(file, "utf8").replace(/^\uFEFF/u, "") : "";
-
 /**
  * Change one server's settings in the `mcp.json` that defines or overrides it, keeping other content,
  * the order of keys, and the file's indentation. With `override`, a missing entry is added as a
@@ -73,7 +71,7 @@ export const updateServerConfig = async (
   options: { readonly override?: boolean } = {}
 ): Promise<void> => {
   await withFileMutationQueue(file, async () => {
-    const text = readText(file);
+    const text = readTextFile(file) ?? "";
     const json: unknown = text.trim() === "" ? {} : JSON.parse(text);
     const parsed = jsonObject.safeParse(json);
 

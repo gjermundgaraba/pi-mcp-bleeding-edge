@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 
+import type { McpOAuthConfig } from "@earendil-works/pi-mcp";
 import type { AuthorizationServerMetadata } from "@modelcontextprotocol/client";
-
-import { listsMetadataDocumentCallback } from "../config/schema.ts";
-import type { McpOAuthConfig } from "../config/schema.ts";
 
 /** The `client_name` pi registers with. */
 const PI_CLIENT_NAME = "pi";
@@ -12,6 +10,22 @@ const PI_CLIENT_NAME = "pi";
 const METADATA_DOCUMENTS = "https://pi.dev/oauth";
 
 const DEFAULT_CALLBACK_PATH = "/callback";
+
+/**
+ * Whether pi's Client ID Metadata Documents list the loopback `callbackUrl`: they list `/callback`
+ * on localhost and 127.0.0.1, on any port. Without `callbackUrl`, pi uses such a URI.
+ */
+export const listsMetadataDocumentCallback = (
+  callbackUrl: string | undefined
+): boolean => {
+  if (callbackUrl === undefined) {
+    return true;
+  }
+
+  const url = new URL(callbackUrl);
+
+  return url.hostname !== "[::1]" && url.pathname === "/callback";
+};
 
 /** How pi identifies itself to an authorization server. */
 export type ClientIdentity =

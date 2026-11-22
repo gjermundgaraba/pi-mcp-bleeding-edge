@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  convertResult,
-  normalizeInputSchema,
-  resultSchema,
-} from "../../tools/definition.ts";
+import { convertResult, resultSchema } from "../../tools/definition.ts";
 
 describe("resultSchema", () => {
   it("places the tool's output schema at structuredContent and keeps its local references working", () => {
@@ -26,15 +22,6 @@ describe("resultSchema", () => {
           },
         },
       },
-    });
-  });
-});
-
-describe("normalizeInputSchema", () => {
-  it("adds properties to object schemas without them", () => {
-    expect(normalizeInputSchema({ type: "object" })).toStrictEqual({
-      type: "object",
-      properties: {},
     });
   });
 });

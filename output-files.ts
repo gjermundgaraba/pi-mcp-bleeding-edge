@@ -8,8 +8,8 @@ import path from "node:path";
  * temporary file only the user can read, and return its path. `extension` includes the dot.
  */
 export const writeOutputFile = async (
-  extension: string,
-  data: string | Uint8Array
+  data: string | Uint8Array,
+  extension: string
 ): Promise<string> => {
   const file = path.join(
     os.tmpdir(),

@@ -8,7 +8,6 @@ import type { ServerEntry } from "../../config/load.ts";
 import { parseServerConfig } from "../../config/schema.ts";
 import { ServerConnection } from "../../connection/connection.ts";
 import { ProtocolVerdicts } from "../../connection/era.ts";
-import { createTransport } from "../../connection/transport.ts";
 import { ServerLog } from "../../log.ts";
 
 /** The path of a fixture file. */
@@ -77,7 +76,6 @@ export const connectFixture = (
     entry: fixtureEntry(raw),
     cwd: dir,
     verdictKey: "fixture",
-    createTransport,
     auth: undefined,
     verdicts,
     log: new ServerLog(logFile),

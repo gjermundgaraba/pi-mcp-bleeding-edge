@@ -9,8 +9,7 @@ import { createMcpHandler } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import { buildLegacyServer } from "./legacy-server.ts";
-import { buildModernServer } from "./modern-server.ts";
-import type { FixtureState } from "./modern-server.ts";
+import { buildModernServer, fixtureState } from "./modern-server.ts";
 
 /** A test server listening on a loopback port. */
 export interface RunningServer {
@@ -37,7 +36,7 @@ const closer = (server: Server) => async (): Promise<void> => {
 
 /** The v2 handler, which serves 2026-07-28 clients and, per request, 2025-era ones. */
 export const startModernHttpServer = async (): Promise<RunningServer> => {
-  const state: FixtureState = { addedTools: [] };
+  const state = fixtureState();
 
   const handler = createMcpHandler(() =>
     buildModernServer(state, () => {

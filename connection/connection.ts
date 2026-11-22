@@ -20,7 +20,6 @@ import type {
   ProtocolEra,
   ReadResourceResult,
   RequestOptions,
-  Resource,
   Tool,
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -38,16 +37,12 @@ import {
   isTransientError,
   signInChallenge,
 } from "./errors.ts";
-import type { TransportFactory } from "./transport.ts";
+import { createTransport } from "./transport.ts";
 
 const DEFAULT_TIMEOUT_SECONDS = 60;
 const STDERR_TAIL_CHARS = 2000;
 const CONNECT_RETRY_DELAYS_MS = [250, 1000];
 const RELISTEN_DELAYS_MS = [1000, 5000, 30_000];
-
-/** A resource template as servers list it. */
-export type ResourceTemplate =
-  ListResourceTemplatesResult["resourceTemplates"][number];
 
 /** Arguments of a tool call. */
 export type ToolArguments = NonNullable<CallToolRequestParams["arguments"]>;
@@ -83,7 +78,6 @@ export interface ConnectionOptions {
   readonly entry: ServerEntry;
   readonly cwd: string;
   readonly verdictKey: string;
-  readonly createTransport: TransportFactory;
   readonly auth: ConnectionAuth | undefined;
   readonly verdicts: ProtocolVerdicts;
   readonly log: ServerLog | undefined;
@@ -93,29 +87,14 @@ export interface ConnectionOptions {
   readonly onChange: (connection: ServerConnection) => void;
 }
 
-const EMPTY_TEMPLATES: ListResourceTemplatesResult = { resourceTemplates: [] };
-
-/** Servers that do not implement `resources/templates/list` have no templates. */
-const withoutTemplates = async (
-  list: () => Promise<ListResourceTemplatesResult>
-): Promise<ListResourceTemplatesResult> => {
-  try {
-    return await list();
-  } catch (error) {
-    if (error instanceof ProtocolError && error.code === METHOD_NOT_FOUND) {
-      return EMPTY_TEMPLATES;
-    }
-
-    throw error;
-  }
-};
-
-const pageParams = (cursor: string | undefined): { cursor?: string } =>
-  cursor === undefined ? {} : { cursor };
+const ignore = (): undefined => undefined;
 
 const hasChallengeDetails = (challenge: OAuthChallenge): boolean =>
   (challenge.scope ?? "") !== "" ||
   (challenge.resourceMetadataUrl ?? "") !== "";
+
+const pageParams = (cursor: string | undefined): { cursor?: string } =>
+  cursor === undefined ? {} : { cursor };
 
 /**
  * One configured server, on the official SDK client. The protocol era is negotiated at connect
@@ -135,6 +114,7 @@ export class ServerConnection {
   protocolVersion: string | undefined;
   private client: Client | undefined;
   private opening: Promise<Client> | undefined;
+  private reconnecting: Promise<void> | undefined;
   private readonly shutdown = new AbortController();
   private stderrTail = "";
   private readonly options: ConnectionOptions;
@@ -164,13 +144,24 @@ export class ServerConnection {
     return this.options.auth?.oauth?.challenge;
   }
 
-  /** Forget the challenge a sign-in answered. */
-  clearChallenge(): void {
-    this.options.auth?.oauth?.setChallenge(undefined);
-  }
-
   private get closed(): boolean {
     return this.shutdown.signal.aborted;
+  }
+
+  /** Start connecting in the background; the state shows how it went. */
+  start(): void {
+    this.getClient().catch(ignore);
+  }
+
+  /** Resolves once no connect or reconnect is in progress, however it ended. */
+  async settled(): Promise<void> {
+    for (
+      let work = this.reconnecting ?? this.opening;
+      work !== undefined;
+      work = this.reconnecting ?? this.opening
+    ) {
+      await work.catch(ignore);
+    }
   }
 
   async getClient(): Promise<Client> {
@@ -187,6 +178,54 @@ export class ServerConnection {
     });
 
     return await this.opening;
+  }
+
+  /** Connect again, for example after a sign-in. Concurrent calls share one reconnect. */
+  async reconnect(): Promise<void> {
+    this.reconnecting ??= (async () => {
+      await this.opening?.catch(ignore);
+
+      if (this.client !== undefined) {
+        await this.dropClient(this.client);
+      }
+
+      await this.getClient();
+    })().finally(() => {
+      this.reconnecting = undefined;
+    });
+
+    await this.reconnecting;
+  }
+
+  /** Disconnect after the stored credentials were removed. */
+  async signOut(): Promise<void> {
+    await this.settled();
+
+    if (this.client !== undefined) {
+      await this.dropClient(this.client);
+    }
+
+    if (!this.closed) {
+      this.markNeedsAuth(undefined);
+    }
+  }
+
+  /** Forget the challenge a sign-in answered. */
+  clearChallenge(): void {
+    this.options.auth?.oauth?.setChallenge(undefined);
+  }
+
+  /** Resolves once no transport of this server is open, and refreshed tokens are saved. */
+  async close(): Promise<void> {
+    this.shutdown.abort();
+    this.state = "closed";
+    this.changed();
+
+    const { client } = this;
+
+    this.client = undefined;
+    await Promise.all([client?.close().catch(ignore), this.settled()]);
+    await this.options.auth?.oauth?.settled();
   }
 
   async callTool(
@@ -220,103 +259,49 @@ export class ServerConnection {
     );
   }
 
-  async resourcesPage(
+  /**
+   * One page of the server's resources. The SDK's `listResources()` walks every page unless given a
+   * cursor, so the first page is requested directly.
+   */
+  async listResources(
     cursor: string | undefined,
     options: CallOptions
   ): Promise<ListResourcesResult> {
-    return await this.withClient(
-      async (client) =>
-        await client.listResources(
-          pageParams(cursor),
-          this.requestOptions(options)
-        ),
-      true
-    );
+    return await this.withClient(async (client) => {
+      if (client.getServerCapabilities()?.resources === undefined) {
+        return { resources: [] };
+      }
+
+      return await client.request(
+        { method: "resources/list", params: pageParams(cursor) },
+        this.requestOptions(options)
+      );
+    }, true);
   }
 
-  async resourceTemplatesPage(
+  /** One page of the server's resource templates; servers without `resources/templates/list` have none. */
+  async listResourceTemplates(
     cursor: string | undefined,
     options: CallOptions
   ): Promise<ListResourceTemplatesResult> {
-    return await this.withClient(
-      async (client) =>
-        await withoutTemplates(
-          async () =>
-            await client.listResourceTemplates(
-              pageParams(cursor),
-              this.requestOptions(options)
-            )
-        ),
-      true
-    );
-  }
+    return await this.withClient(async (client) => {
+      if (client.getServerCapabilities()?.resources === undefined) {
+        return { resourceTemplates: [] };
+      }
 
-  async allResources(options: CallOptions): Promise<Resource[]> {
-    const result = await this.withClient(
-      async (client) =>
-        await client.listResources(undefined, this.requestOptions(options)),
-      true
-    );
+      try {
+        return await client.request(
+          { method: "resources/templates/list", params: pageParams(cursor) },
+          this.requestOptions(options)
+        );
+      } catch (error) {
+        if (error instanceof ProtocolError && error.code === METHOD_NOT_FOUND) {
+          return { resourceTemplates: [] };
+        }
 
-    return result.resources;
-  }
-
-  async allResourceTemplates(
-    options: CallOptions
-  ): Promise<ResourceTemplate[]> {
-    const result = await this.withClient(
-      async (client) =>
-        await withoutTemplates(
-          async () =>
-            await client.listResourceTemplates(
-              undefined,
-              this.requestOptions(options)
-            )
-        ),
-      true
-    );
-
-    return result.resourceTemplates;
-  }
-
-  /** Connect again, for example after a sign-in. */
-  async reconnect(): Promise<void> {
-    await this.opening?.catch(() => undefined);
-
-    if (this.client !== undefined) {
-      await this.dropClient(this.client);
-    }
-
-    await this.getClient();
-  }
-
-  /** Disconnect after the stored credentials were removed. */
-  async signOut(): Promise<void> {
-    await this.opening?.catch(() => undefined);
-
-    if (this.client !== undefined) {
-      await this.dropClient(this.client);
-    }
-
-    if (!this.closed) {
-      this.markNeedsAuth(undefined);
-    }
-  }
-
-  /** Resolves once no transport of this server is open, and refreshed tokens are saved. */
-  async close(): Promise<void> {
-    this.shutdown.abort();
-    this.state = "closed";
-    this.changed();
-
-    const { client } = this;
-
-    this.client = undefined;
-    await Promise.all([
-      client?.close().catch(() => undefined),
-      this.opening?.catch(() => undefined),
-    ]);
-    await this.options.auth?.oauth?.settled();
+        throw error;
+      }
+    }, true);
   }
 
   private requestOptions(options: CallOptions): RequestOptions {
@@ -328,8 +313,7 @@ export class ServerConnection {
 
   /**
    * Run a request, connecting when needed. Read-only requests are retried once after a transient
-   * HTTP error; tool calls are not, since they may have run. A 2025-era HTTP session the server
-   * forgot did not run the request, so it is retried once on a new session.
+   * HTTP error; tool calls are not, since they may have run.
    */
   private async withClient<T>(
     run: (client: Client) => Promise<T>,
@@ -347,6 +331,9 @@ export class ServerConnection {
         }
 
         if (attempt === 1 && this.era === "legacy" && isSessionExpired(error)) {
+          // A 2025-era server that forgot the session (restart, deploy) did not run the request, so
+          // retry once on a new session. The old client is detached, not closed: closing it would
+          // fail its other in-flight requests, which get the same 404 and retry the same way.
           if (this.client === client) {
             this.client = undefined;
           }
@@ -397,7 +384,7 @@ export class ServerConnection {
       this.client = undefined;
     }
 
-    await client.close().catch(() => undefined);
+    await client.close().catch(ignore);
   }
 
   private async open(): Promise<Client> {
@@ -419,7 +406,7 @@ export class ServerConnection {
         }
 
         await sleep(delay, undefined, { signal: this.shutdown.signal }).catch(
-          () => undefined
+          ignore
         );
 
         if (this.closed) {
@@ -456,10 +443,8 @@ export class ServerConnection {
   }
 
   private createClient(): Client {
-    const preference = this.entry.config.protocol ?? "auto";
-
     const negotiation = versionNegotiation(
-      preference,
+      this.entry.config.protocol ?? "auto",
       !isHttpConfig(this.entry.config)
     );
 
@@ -498,13 +483,19 @@ export class ServerConnection {
     return client;
   }
 
-  private rememberVerdict(client: Client): void {
-    const discover = client.getDiscoverResult();
+  private async listTools(client: Client): Promise<Tool[]> {
+    // The SDK returns no tools for servers without the tools capability too, but logs to the
+    // console, which pi's terminal would show.
+    if (client.getServerCapabilities()?.tools === undefined) {
+      return [];
+    }
 
-    this.options.verdicts.record(
-      this.options.verdictKey,
-      discover === undefined ? { kind: "legacy" } : { kind: "modern", discover }
-    );
+    const result = await client.listTools(undefined, {
+      timeout: this.timeoutMs,
+      signal: this.shutdown.signal,
+    });
+
+    return result.tools;
   }
 
   private connected(client: Client, tools: Tool[]): void {
@@ -522,19 +513,6 @@ export class ServerConnection {
     this.changed();
   }
 
-  private async listTools(client: Client): Promise<Tool[]> {
-    if (client.getServerCapabilities()?.tools === undefined) {
-      return [];
-    }
-
-    const result = await client.listTools(undefined, {
-      timeout: this.timeoutMs,
-      signal: this.shutdown.signal,
-    });
-
-    return result.tools;
-  }
-
   private async connectOnce(
     prior: PriorDiscovery | undefined
   ): Promise<Client> {
@@ -542,14 +520,14 @@ export class ServerConnection {
     let closing: Promise<void> | undefined;
 
     const closeClient = (): void => {
-      closing ??= client.close().catch(() => undefined);
+      closing ??= client.close().catch(ignore);
     };
 
     this.shutdown.signal.addEventListener("abort", closeClient, { once: true });
     this.stderrTail = "";
 
     try {
-      const transport = this.options.createTransport(
+      const transport = createTransport(
         this.entry,
         this.options.cwd,
         this.options.auth?.provider
@@ -578,7 +556,14 @@ export class ServerConnection {
         prior === undefined &&
         (this.entry.config.protocol ?? "auto") === "auto"
       ) {
-        this.rememberVerdict(client);
+        const discover = client.getDiscoverResult();
+
+        this.options.verdicts.record(
+          this.options.verdictKey,
+          discover === undefined
+            ? { kind: "legacy" }
+            : { kind: "modern", discover }
+        );
       }
 
       this.connected(client, tools);
@@ -628,21 +613,24 @@ export class ServerConnection {
 
     return new Error(
       `MCP server "${this.name}" failed to connect: ${this.error}`,
-      {
-        cause: error,
-      }
+      { cause: error }
     );
   }
 
-  private handleClose(client: Client): void {
+  /** The client stopped serving: the next call reconnects; until then the state shows why. */
+  private disconnected(client: Client, reason: string): void {
     if (this.client !== client || this.closed) {
       return;
     }
 
     this.client = undefined;
     this.state = "disconnected";
-    this.error = this.withStderr("Connection closed");
+    this.error = this.withStderr(reason);
     this.changed();
+  }
+
+  private handleClose(client: Client): void {
+    this.disconnected(client, "Connection closed");
   }
 
   private toolsChanged(
@@ -667,6 +655,7 @@ export class ServerConnection {
   /**
    * On the 2026-07-28 era change notifications arrive on a `subscriptions/listen` stream, which
    * the SDK does not reopen when it drops; reopen it, then list the tools to catch missed changes.
+   * When it cannot be reopened, the connection counts as dropped, so the next call reconnects.
    */
   private async watchSubscription(
     client: Client,
@@ -679,9 +668,11 @@ export class ServerConnection {
       return;
     }
 
+    let failure = "";
+
     for (const delay of RELISTEN_DELAYS_MS) {
       await sleep(delay, undefined, { signal: this.shutdown.signal }).catch(
-        () => undefined
+        ignore
       );
 
       if (this.client !== client || this.closed) {
@@ -703,9 +694,12 @@ export class ServerConnection {
         void this.watchSubscription(client, next);
 
         return;
-      } catch {
-        continue;
+      } catch (error) {
+        failure = errorMessage(error);
       }
     }
+
+    this.disconnected(client, `Change notifications stopped: ${failure}`);
+    await client.close().catch(ignore);
   }
 }

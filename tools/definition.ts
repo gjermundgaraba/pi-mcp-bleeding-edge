@@ -5,24 +5,25 @@ import type {
   ToolDefinition,
   ToolNamespace,
 } from "@earendil-works/pi-coding-agent";
+import { normalizeMcpInputSchema } from "@earendil-works/pi-mcp";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/client";
 import type { TSchema } from "typebox";
-import { z } from "zod";
 
 import { toPiExposure } from "../config/exposure.ts";
 import type { McpExposure } from "../config/exposure.ts";
 import type { CallOptions, ToolArguments } from "../connection/connection.ts";
-import { limitContent, toJsonValue, toModelContent } from "./content.ts";
-import type { ContentOptions, ModelContent } from "./content.ts";
+import { limitContent, toModelContent } from "./content.ts";
+import type { ModelContent } from "./content.ts";
+import { asJsonValue } from "./json.ts";
 import { mcpToolRenderers } from "./render.ts";
 
 /** What a tool call needs of its server's connection. */
 export interface ToolCaller {
-  readonly callTool: (
+  callTool(
     name: string,
     args: ToolArguments,
     options: CallOptions
-  ) => Promise<CallToolResult>;
+  ): Promise<CallToolResult>;
 }
 
 /** Details of MCP tool results, for rendering. */
@@ -61,11 +62,8 @@ const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
   "definitions",
 ]);
 
-const toolArguments = z.record(z.string(), z.unknown());
-
-const localRef = z
-  .string()
-  .refine((ref) => ref === "#" || ref.startsWith("#/"));
+const isObject = (value: JsonValue): value is { [key: string]: JsonValue } =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** `schema` moved below `pointer` of another schema, with its local `$ref`s rewritten to match. */
 const relocateSchema = (schema: JsonValue, pointer: string): JsonValue => {
@@ -73,27 +71,25 @@ const relocateSchema = (schema: JsonValue, pointer: string): JsonValue => {
     return schema.map((item: JsonValue) => relocateSchema(item, pointer));
   }
 
-  if (!(schema instanceof Object)) {
+  if (!isObject(schema)) {
     return schema;
   }
 
-  return Object.fromEntries(
-    Object.entries(schema).map(([key, value]): [string, JsonValue] => {
-      const ref = localRef.safeParse(value);
-
-      if (key === "$ref" && ref.success) {
-        return [key, `${pointer}${ref.data.slice(1)}`];
+  const entries = Object.entries(schema).map(
+    ([key, value]): [string, JsonValue] => {
+      if (
+        key === "$ref" &&
+        typeof value === "string" &&
+        (value === "#" || value.startsWith("#/"))
+      ) {
+        return [key, `${pointer}${value.slice(1)}`];
       }
 
       if (SCHEMA_DATA_KEYWORDS.has(key)) {
         return [key, value];
       }
 
-      if (
-        SCHEMA_MAP_KEYWORDS.has(key) &&
-        value instanceof Object &&
-        !Array.isArray(value)
-      ) {
+      if (SCHEMA_MAP_KEYWORDS.has(key) && isObject(value)) {
         return [
           key,
           Object.fromEntries(
@@ -106,8 +102,10 @@ const relocateSchema = (schema: JsonValue, pointer: string): JsonValue => {
       }
 
       return [key, relocateSchema(value, pointer)];
-    })
+    }
   );
+
+  return Object.fromEntries(entries);
 };
 
 /**
@@ -122,20 +120,13 @@ export const resultSchema = (outputSchema: Tool["outputSchema"]): TSchema => ({
       outputSchema === undefined
         ? {}
         : relocateSchema(
-            toJsonValue(outputSchema),
+            asJsonValue(outputSchema),
             "#/properties/structuredContent"
           ),
     isError: { type: "boolean" },
   },
   required: ["content"],
   additionalProperties: true,
-});
-
-/** An input schema as tool APIs accept it: an object schema with `properties`. */
-export const normalizeInputSchema = (schema: Tool["inputSchema"]): TSchema => ({
-  ...schema,
-  type: "object",
-  properties: schema.properties ?? {},
 });
 
 const textOf = (content: readonly ModelContent[]): string =>
@@ -146,19 +137,20 @@ const textOf = (content: readonly ModelContent[]): string =>
 const modelContentOf = async (
   server: string,
   result: CallToolResult,
-  options: ContentOptions
+  readableResources: boolean
 ): Promise<ModelContent[]> => {
   if (result.content.length > 0) {
-    return await toModelContent(server, result.content, options);
+    return await toModelContent(server, result.content, readableResources);
   }
 
-  if (result.structuredContent === undefined) {
-    return [];
-  }
-
-  return [
-    { type: "text", text: JSON.stringify(result.structuredContent, null, 2) },
-  ];
+  return result.structuredContent === undefined
+    ? []
+    : [
+        {
+          type: "text",
+          text: JSON.stringify(result.structuredContent, null, 2),
+        },
+      ];
 };
 
 /**
@@ -170,9 +162,9 @@ export const convertResult = async (
   server: string,
   tool: string,
   result: CallToolResult,
-  options: ContentOptions = {}
+  readableResources = false
 ): Promise<AgentToolResult<McpToolDetails>> => {
-  const converted = await modelContentOf(server, result, options);
+  const converted = await modelContentOf(server, result, readableResources);
   const isError = result.isError === true;
 
   if (isError && textOf(converted) === "") {
@@ -182,11 +174,7 @@ export const convertResult = async (
     });
   }
 
-  const { content, fullOutputPath } = await limitContent(
-    converted,
-    options.save
-  );
-
+  const { content, fullOutputPath } = await limitContent(converted);
   const { _meta: _ignored, ...scriptResult } = result;
 
   return {
@@ -196,7 +184,7 @@ export const convertResult = async (
       tool,
       ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
     },
-    structuredContent: toJsonValue(scriptResult),
+    structuredContent: asJsonValue(scriptResult),
     ...(isError ? { isError: true } : {}),
   };
 };
@@ -208,36 +196,28 @@ const annotationsOf = (tool: Tool): ToolAnnotations | undefined => {
     return undefined;
   }
 
-  const annotations: ToolAnnotations = {
-    ...(hints.readOnlyHint === undefined
-      ? {}
-      : { readOnlyHint: hints.readOnlyHint }),
-    ...(hints.destructiveHint === undefined
-      ? {}
-      : { destructiveHint: hints.destructiveHint }),
-    ...(hints.idempotentHint === undefined
-      ? {}
-      : { idempotentHint: hints.idempotentHint }),
-    ...(hints.openWorldHint === undefined
-      ? {}
-      : { openWorldHint: hints.openWorldHint }),
-  };
+  const annotations: ToolAnnotations = {};
+
+  for (const hint of [
+    "readOnlyHint",
+    "destructiveHint",
+    "idempotentHint",
+    "openWorldHint",
+  ] as const) {
+    const value = hints[hint];
+
+    if (value !== undefined) {
+      annotations[hint] = value;
+    }
+  }
 
   return Object.keys(annotations).length > 0 ? annotations : undefined;
 };
 
-const describe = (server: string, tool: Tool): string => {
-  const candidates = [
-    tool.description?.trim(),
-    tool.title,
-    tool.annotations?.title,
-  ];
-
-  return (
-    candidates.find((text) => text !== undefined && text !== "") ??
-    `MCP tool ${tool.name} from server ${server}`
-  );
-};
+const describe = (server: string, tool: Tool): string =>
+  [tool.description?.trim(), tool.title, tool.annotations?.title].find(
+    (text) => text !== undefined && text !== ""
+  ) ?? `MCP tool ${tool.name} from server ${server}`;
 
 /** One server tool as a pi tool. */
 export interface ToolDefinitionOptions {
@@ -262,38 +242,42 @@ export const createToolDefinition = (
     name: options.name,
     label,
     description: describe(server, tool),
-    parameters: normalizeInputSchema(tool.inputSchema),
+    parameters: normalizeMcpInputSchema(tool.inputSchema),
     outputSchema: resultSchema(tool.outputSchema),
     exposure: toPiExposure(options.exposure),
     namespace: options.namespace,
     ...(annotations === undefined ? {} : { annotations }),
     ...mcpToolRenderers(label),
-    async execute(_toolCallId, params, signal, onUpdate) {
+    async execute(
+      _toolCallId,
+      params: ToolArguments | undefined,
+      signal,
+      onUpdate
+    ) {
       const caller = await options.caller();
 
-      const result = await caller.callTool(
-        tool.name,
-        toolArguments.parse(params ?? {}),
-        {
-          signal,
-          onProgress: (progress) => {
-            const total =
-              progress.total === undefined ? "" : `/${progress.total}`;
+      const result = await caller.callTool(tool.name, params ?? {}, {
+        signal,
+        onProgress: (progress) => {
+          const total =
+            progress.total === undefined ? "" : `/${progress.total}`;
 
-            const text =
-              progress.message ?? `Progress ${progress.progress}${total}`;
+          const text =
+            progress.message ?? `Progress ${progress.progress}${total}`;
 
-            onUpdate?.({
-              content: [{ type: "text", text }],
-              details: { server, tool: tool.name },
-            });
-          },
-        }
-      );
-
-      return await convertResult(server, tool.name, result, {
-        readableResources: options.readableResources(),
+          onUpdate?.({
+            content: [{ type: "text", text }],
+            details: { server, tool: tool.name },
+          });
+        },
       });
+
+      return await convertResult(
+        server,
+        tool.name,
+        result,
+        options.readableResources()
+      );
     },
   };
 };

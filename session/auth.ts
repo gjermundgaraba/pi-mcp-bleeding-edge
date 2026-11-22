@@ -9,13 +9,13 @@ import { createOAuthConnectionAuth } from "../oauth/connection-auth.ts";
 import type { OAuthChallenge } from "../oauth/errors.ts";
 import { signIn } from "../oauth/sign-in.ts";
 import type { SignInPrompt } from "../oauth/sign-in.ts";
-import { CredentialStore } from "../oauth/store.ts";
+import { ServerCredentials } from "../oauth/store.ts";
 
 /** HTTP servers sign in with OAuth unless they send an `Authorization` header or a provider's token. */
 const oauthConfig = (entry: ServerEntry): McpHttpServerConfig | undefined => {
   const { config } = entry;
 
-  if (!isHttpConfig(config) || config.auth) {
+  if (!isHttpConfig(config) || config.auth !== undefined) {
     return undefined;
   }
 
@@ -42,15 +42,15 @@ const clientSecret = (
 
 /** Credentials of the session's servers: OAuth sign-ins, and tokens of pi's `/login` providers. */
 export class SessionAuth {
-  private readonly store: CredentialStore;
+  private readonly directory: string;
   private modelRegistry: ModelRegistry | undefined;
 
-  constructor(credentialsPath: string) {
-    this.store = new CredentialStore(credentialsPath);
+  constructor(directory: string) {
+    this.directory = directory;
   }
 
   /** The session's model registry, which holds the tokens of `auth.provider` servers. */
-  useModelRegistry(registry: ModelRegistry | undefined): void {
+  useModelRegistry(registry: ModelRegistry): void {
     this.modelRegistry = registry;
   }
 
@@ -58,7 +58,7 @@ export class SessionAuth {
   connectionAuth(entry: ServerEntry): ConnectionAuth | undefined {
     const { config } = entry;
 
-    if (isHttpConfig(config) && config.auth) {
+    if (isHttpConfig(config) && config.auth !== undefined) {
       const { provider } = config.auth;
 
       return {
@@ -72,14 +72,14 @@ export class SessionAuth {
 
     const oauth = oauthConfig(entry);
 
-    if (!oauth) {
+    if (oauth === undefined) {
       return undefined;
     }
 
     const clientId = oauth.oauth?.clientId;
 
     const provider = createOAuthConnectionAuth({
-      credentials: this.store.forServer(entry.name, oauth.url),
+      credentials: this.credentials(entry, oauth),
       configuredClient: () => {
         if (clientId === undefined || clientId === "") {
           return undefined;
@@ -106,7 +106,7 @@ export class SessionAuth {
   ): Promise<void> {
     const oauth = oauthConfig(entry);
 
-    if (!oauth) {
+    if (oauth === undefined) {
       throw new Error(`MCP server "${entry.name}" does not use OAuth.`);
     }
 
@@ -114,7 +114,7 @@ export class SessionAuth {
       serverUrl: oauth.url,
       settings: oauth.oauth,
       clientSecret: clientSecret(entry, oauth),
-      credentials: this.store.forServer(entry.name, oauth.url),
+      credentials: this.credentials(entry, oauth),
       challenge,
       prompt,
       signal,
@@ -123,25 +123,28 @@ export class SessionAuth {
 
   /** Delete the server's stored credentials. Resolves to whether there were any. */
   async signOut(entry: ServerEntry): Promise<boolean> {
-    const url = oauthConfig(entry)?.url;
+    const oauth = oauthConfig(entry);
 
-    return url === undefined ? false : await this.store.remove(entry.name, url);
+    return oauth === undefined
+      ? false
+      : await this.credentials(entry, oauth).remove();
   }
 
   /** The stored tokens as text, to notice sign-ins made by other pi processes. */
   storedTokens(entry: ServerEntry): string {
-    const url = oauthConfig(entry)?.url;
+    const oauth = oauthConfig(entry);
 
-    if (url === undefined) {
-      return "null";
-    }
+    return JSON.stringify(
+      (oauth === undefined
+        ? undefined
+        : this.credentials(entry, oauth).read()?.tokens) ?? null
+    );
+  }
 
-    try {
-      return JSON.stringify(
-        this.store.forServer(entry.name, url).read()?.tokens ?? null
-      );
-    } catch {
-      return "null";
-    }
+  private credentials(
+    entry: ServerEntry,
+    config: McpHttpServerConfig
+  ): ServerCredentials {
+    return new ServerCredentials(this.directory, entry.name, config.url);
   }
 }

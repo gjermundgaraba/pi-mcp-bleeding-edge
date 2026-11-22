@@ -5,13 +5,12 @@ import {
 } from "@modelcontextprotocol/client";
 import type {
   AuthProvider,
-  FetchLike,
   OAuthClientInformationMixed,
 } from "@modelcontextprotocol/client";
 
 import { SignInRequiredError } from "./errors.ts";
 import type { OAuthChallenge } from "./errors.ts";
-import { RefreshLockBusyError } from "./store.ts";
+import { RefreshLockBusyError, storedTokens } from "./store.ts";
 import type { ServerCredentials, StoredTokens } from "./store.ts";
 
 const EXPIRY_SKEW_MS = 30_000;
@@ -45,7 +44,6 @@ export const createOAuthConnectionAuth = (options: {
   readonly credentials: ServerCredentials;
   /** A configured client, with its secret resolved; undefined for registered and document clients. */
   readonly configuredClient: () => OAuthClientInformationMixed | undefined;
-  readonly fetch?: FetchLike | undefined;
 }): OAuthConnectionAuth => {
   const { credentials } = options;
   let challenge: OAuthChallenge | undefined;
@@ -88,7 +86,6 @@ export const createOAuthConnectionAuth = (options: {
         ...(discovery.resourceMetadata === undefined
           ? {}
           : { resource: discovery.resourceMetadata.resource }),
-        ...(options.fetch === undefined ? {} : { fetchFn: options.fetch }),
       });
     } catch (error) {
       if (error instanceof OAuthError) {
@@ -98,19 +95,9 @@ export const createOAuthConnectionAuth = (options: {
       throw error;
     }
 
-    const expiresAt =
-      refreshed.expires_in === undefined
-        ? undefined
-        : Date.now() + refreshed.expires_in * 1000;
-
     await credentials.update((state) => ({
       ...state,
-      tokens: {
-        ...refreshed,
-        refresh_token: refreshed.refresh_token ?? refreshToken,
-        issuer: tokens.issuer,
-        expiresAt,
-      },
+      tokens: storedTokens(refreshed, tokens),
     }));
   };
 

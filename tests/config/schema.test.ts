@@ -30,7 +30,7 @@ describe("parseServerConfig", () => {
   it("names the field and the server of an invalid entry", () => {
     expect(
       parseServerConfig("files", { command: "x", timeout: -1 }).error
-    ).toBe('server "files": timeout: must be a positive number of seconds');
+    ).toBe('server "files": timeout must be a positive number of seconds');
     expect(
       parseServerConfig("files", { command: "x", protocol: "2025" }).error
     ).toBe('server "files": protocol: must be "auto", "modern", or "legacy"');
@@ -54,7 +54,7 @@ describe("parseServerConfig", () => {
         url: "http://example.com/mcp",
         auth: { provider: "radius" },
       }).error
-    ).toContain("auth: requires an https URL");
+    ).toContain("auth requires an https URL");
     expect(
       parseServerConfig("local", {
         url: "http://localhost:8080/mcp",
@@ -87,7 +87,7 @@ describe("parseServerConfig", () => {
           callbackPort: 9001,
         },
       }).error
-    ).toContain("names a different port");
+    ).toContain("name different ports");
   });
 });
 

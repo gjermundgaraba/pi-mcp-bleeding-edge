@@ -6,25 +6,23 @@ import type {
 import type {
   ContentBlock,
   ListResourcesResult,
+  ListResourceTemplatesResult,
   ReadResourceResult,
-  Resource,
 } from "@modelcontextprotocol/client";
 import { Type } from "typebox";
 import type { Static, TSchema } from "typebox";
 
 import { toPiExposure } from "../config/exposure.ts";
 import type { McpExposure } from "../config/exposure.ts";
-import type {
-  CallOptions,
-  ResourceTemplate,
-} from "../connection/connection.ts";
+import type { CallOptions } from "../connection/connection.ts";
+import { errorMessage } from "../connection/errors.ts";
 import {
   limitContent,
   READ_MCP_RESOURCE_TOOL,
-  toJsonValue,
   toModelContent,
 } from "./content.ts";
 import type { McpToolDetails } from "./definition.ts";
+import { asJsonValue } from "./json.ts";
 
 export { READ_MCP_RESOURCE_TOOL } from "./content.ts";
 
@@ -38,31 +36,24 @@ export const RESOURCE_TOOL_NAMES: ReadonlySet<string> = new Set([
   READ_MCP_RESOURCE_TOOL,
 ]);
 
+/** Pages a listing of every server walks per server at most. */
+const MAX_PAGES = 64;
+
 /** A connected server that offers resources. */
 export interface ResourceServer {
   readonly name: string;
-  readonly resourcesPage: (
+  listResources(
     cursor: string | undefined,
     options: CallOptions
-  ) => Promise<ListResourcesResult>;
-  readonly resourceTemplatesPage: (
+  ): Promise<ListResourcesResult>;
+  listResourceTemplates(
     cursor: string | undefined,
     options: CallOptions
-  ) => Promise<{
-    resourceTemplates: ResourceTemplate[];
-    nextCursor?: string | undefined;
-  }>;
-  readonly allResources: (options: CallOptions) => Promise<Resource[]>;
-  readonly allResourceTemplates: (
-    options: CallOptions
-  ) => Promise<ResourceTemplate[]>;
-  readonly readResource: (
-    uri: string,
-    options: CallOptions
-  ) => Promise<ReadResourceResult>;
+  ): Promise<ListResourceTemplatesResult>;
+  readResource(uri: string, options: CallOptions): Promise<ReadResourceResult>;
 }
 
-/** A resource or template as listed: `uri` or `uriTemplate`, and decorations the listings drop. */
+/** A listed resource or template. */
 interface ListedItem {
   readonly uri?: string;
   readonly uriTemplate?: string;
@@ -71,23 +62,48 @@ interface ListedItem {
   readonly icons?: unknown;
 }
 
+/** One page of a listing. */
+interface Page {
+  readonly items: readonly ListedItem[];
+  readonly nextCursor?: string | undefined;
+}
+
+type PageOf = (
+  server: ResourceServer,
+  cursor: string | undefined,
+  options: CallOptions
+) => Promise<Page>;
+
+const resourcesPage: PageOf = async (server, cursor, options) => {
+  const result = await server.listResources(cursor, options);
+
+  return { items: result.resources, nextCursor: result.nextCursor };
+};
+
+const templatesPage: PageOf = async (server, cursor, options) => {
+  const result = await server.listResourceTemplates(cursor, options);
+
+  return { items: result.resourceTemplates, nextCursor: result.nextCursor };
+};
+
 const MCP_APP_PROFILE = /;\s*profile\s*=\s*"?mcp-app"?/iu;
 
-/** MCP App user interfaces, which only hosts that render them can use. */
-const isMcpAppResource = (item: ListedItem): boolean => {
-  const uri = item.uri ?? item.uriTemplate ?? "";
+/** MCP App user interfaces, which only hosts that render them can use; listings leave them out. */
+const isMcpAppResource = (item: ListedItem): boolean =>
+  (item.uri ?? item.uriTemplate ?? "").startsWith("ui://") ||
+  MCP_APP_PROFILE.test(item.mimeType ?? "");
 
-  return uri.startsWith("ui://") || MCP_APP_PROFILE.test(item.mimeType ?? "");
-};
+/** Listed items without MCP Apps, `_meta`, and icons, tagged with their server. */
+const listed = (server: string, items: readonly ListedItem[]): object[] =>
+  items.flatMap((item) => {
+    if (isMcpAppResource(item)) {
+      return [];
+    }
 
-const listed = <T extends ListedItem>(
-  server: string,
-  item: T
-): Omit<T, "_meta" | "icons"> & { readonly server: string } => {
-  const { _meta: _ignored, icons: _icons, ...rest } = item;
+    const { _meta: _ignored, icons: _icons, ...rest } = item;
 
-  return { server, ...rest };
-};
+    return [{ server, ...rest }];
+  });
 
 const LIST_PARAMETERS = Type.Object(
   {
@@ -125,19 +141,9 @@ type ListParameters = Static<typeof LIST_PARAMETERS>;
 
 const optionalString = { type: "string" };
 
-const LISTING_ERRORS = {
-  type: "array",
-  description: "Servers that could not be listed",
-  items: {
-    type: "object",
-    properties: { server: { type: "string" }, error: { type: "string" } },
-    required: ["server", "error"],
-  },
-};
-
 const listOutputSchema = (
   key: string,
-  properties: TSchema,
+  properties: object,
   required: readonly string[]
 ): TSchema => ({
   type: "object",
@@ -145,7 +151,15 @@ const listOutputSchema = (
     server: optionalString,
     [key]: { type: "array", items: { type: "object", properties, required } },
     nextCursor: optionalString,
-    errors: LISTING_ERRORS,
+    errors: {
+      type: "array",
+      description: "Servers that could not be listed",
+      items: {
+        type: "object",
+        properties: { server: { type: "string" }, error: { type: "string" } },
+        required: ["server", "error"],
+      },
+    },
   },
   required: [key],
 });
@@ -218,9 +232,6 @@ const given = (value: string | undefined): string | undefined => {
   return trimmed === "" ? undefined : trimmed;
 };
 
-const errorText = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : String(reason);
-
 const jsonResult = async (
   tool: string,
   server: string | undefined,
@@ -241,46 +252,34 @@ const jsonResult = async (
   };
 };
 
-interface Page<T> {
-  readonly items: readonly T[];
-  readonly nextCursor?: string | undefined;
-}
+/** Every item of one server, page by page. */
+const allItems = async (
+  server: ResourceServer,
+  page: PageOf,
+  signal: AbortSignal | undefined
+): Promise<ListedItem[]> => {
+  const items: ListedItem[] = [];
+  let cursor: string | undefined;
 
-/** How one of the two listing tools lists. */
-interface Listing<T extends ListedItem> {
-  readonly key: "resources" | "resourceTemplates";
-  readonly page: (
-    server: ResourceServer,
-    cursor: string | undefined,
-    options: CallOptions
-  ) => Promise<Page<T>>;
-  readonly all: (server: ResourceServer, options: CallOptions) => Promise<T[]>;
-}
+  for (let pages = 0; pages < MAX_PAGES; pages += 1) {
+    const result = await page(server, cursor, { signal });
 
-const RESOURCES: Listing<Resource> = {
-  key: "resources",
-  page: async (server, cursor, options) => {
-    const result = await server.resourcesPage(cursor, options);
+    items.push(...result.items);
+    cursor = result.nextCursor;
 
-    return { items: result.resources, nextCursor: result.nextCursor };
-  },
-  all: async (server, options) => await server.allResources(options),
-};
+    if (cursor === undefined) {
+      break;
+    }
+  }
 
-const TEMPLATES: Listing<ResourceTemplate> = {
-  key: "resourceTemplates",
-  page: async (server, cursor, options) => {
-    const result = await server.resourceTemplatesPage(cursor, options);
-
-    return { items: result.resourceTemplates, nextCursor: result.nextCursor };
-  },
-  all: async (server, options) => await server.allResourceTemplates(options),
+  return items;
 };
 
 /**
  * The three resource tools Codex and opencode use, so models trained on them use them unchanged.
- * Listings are JSON: one page of one server, or every page of every server. MCP App resources and
- * icons are left out. `servers` returns the servers they reach when a call runs.
+ * Listings are JSON: one page of one server, continued with its `nextCursor`, or every page of
+ * every server. MCP App resources and icons are left out. `servers` returns the servers they reach
+ * when a call runs.
  */
 export const createResourceToolDefinitions = (options: {
   readonly exposure: McpExposure;
@@ -299,72 +298,61 @@ export const createResourceToolDefinitions = (options: {
 
     const available = servers.map((candidate) => candidate.name).join(", ");
 
-    const hint =
-      available === "" ? "" : `. Servers with resources: ${available}`;
-
-    throw new Error(`MCP server "${name}" has no resources${hint}`);
+    throw new Error(
+      `MCP server "${name}" has no resources${available === "" ? "" : `. Servers with resources: ${available}`}`
+    );
   };
 
-  const listAll = async <T extends ListedItem>(
+  const list = async (
+    params: ListParameters,
     signal: AbortSignal | undefined,
-    listing: Listing<T>
-  ): Promise<JsonValue> => {
+    key: string,
+    page: PageOf
+  ) => {
+    const serverName = given(params.server);
+    const cursor = given(params.cursor);
+
+    if (serverName !== undefined) {
+      const server = findServer(serverName);
+      const result = await page(server, cursor, { signal });
+
+      return asJsonValue({
+        server: server.name,
+        [key]: listed(server.name, result.items),
+        ...(result.nextCursor === undefined
+          ? {}
+          : { nextCursor: result.nextCursor }),
+      });
+    }
+
+    if (cursor !== undefined) {
+      throw new Error("cursor can only be used when a server is specified");
+    }
+
     const servers = options
       .servers()
       .toSorted((a, b) => a.name.localeCompare(b.name));
 
     const results = await Promise.allSettled(
-      servers.map(async (server) => await listing.all(server, { signal }))
+      servers.map(async (server) => await allItems(server, page, signal))
     );
 
     const items: object[] = [];
     const errors: Array<{ server: string; error: string }> = [];
 
     for (const [index, result] of results.entries()) {
-      const server = servers[index]?.name ?? "";
+      const name = servers[index]?.name ?? "";
 
       if (result.status === "fulfilled") {
-        items.push(
-          ...result.value
-            .filter((item) => !isMcpAppResource(item))
-            .map((item) => listed(server, item))
-        );
+        items.push(...listed(name, result.value));
       } else {
-        errors.push({ server, error: errorText(result.reason) });
+        errors.push({ server: name, error: errorMessage(result.reason) });
       }
     }
 
-    return toJsonValue({
-      [listing.key]: items,
+    return asJsonValue({
+      [key]: items,
       ...(errors.length > 0 ? { errors } : {}),
-    });
-  };
-
-  const list = async <T extends ListedItem>(
-    params: ListParameters,
-    signal: AbortSignal | undefined,
-    listing: Listing<T>
-  ): Promise<JsonValue> => {
-    const serverName = given(params.server);
-    const cursor = given(params.cursor);
-
-    if (serverName === undefined) {
-      if (cursor !== undefined) {
-        throw new Error("cursor can only be used when a server is specified");
-      }
-
-      return await listAll(signal, listing);
-    }
-
-    const server = findServer(serverName);
-    const page = await listing.page(server, cursor, { signal });
-
-    return toJsonValue({
-      server: server.name,
-      [listing.key]: page.items
-        .filter((item) => !isMcpAppResource(item))
-        .map((item) => listed(server.name, item)),
-      ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
     });
   };
 
@@ -382,7 +370,7 @@ export const createResourceToolDefinitions = (options: {
         await jsonResult(
           LIST_MCP_RESOURCES_TOOL,
           given(params.server),
-          await list(params, signal, RESOURCES)
+          await list(params, signal, "resources", resourcesPage)
         ),
     };
 
@@ -400,7 +388,7 @@ export const createResourceToolDefinitions = (options: {
         await jsonResult(
           LIST_MCP_RESOURCE_TEMPLATES_TOOL,
           given(params.server),
-          await list(params, signal, TEMPLATES)
+          await list(params, signal, "resourceTemplates", templatesPage)
         ),
     };
 
@@ -455,7 +443,7 @@ export const createResourceToolDefinitions = (options: {
           tool: READ_MCP_RESOURCE_TOOL,
           ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
         },
-        structuredContent: toJsonValue({ server: server.name, uri, contents }),
+        structuredContent: asJsonValue({ server: server.name, uri, contents }),
       };
     },
   };

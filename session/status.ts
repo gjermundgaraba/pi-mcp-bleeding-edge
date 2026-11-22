@@ -1,42 +1,35 @@
+import { serverExposure } from "../config/exposure.ts";
 import type { ServerEntry } from "../config/load.ts";
 import { isHttpConfig } from "../config/schema.ts";
-import type { ConnectionState } from "../connection/connection.ts";
+import type { ServerConnection } from "../connection/connection.ts";
 
-/** What status lines need of a server. */
+/** What status text needs of a server. */
 export interface ServerStatus {
   readonly entry: ServerEntry;
-  readonly connection?:
-    | {
-        readonly state: ConnectionState;
-        readonly error: string | undefined;
-        readonly tools: readonly unknown[];
-        readonly hasResources: boolean;
-        readonly protocolVersion: string | undefined;
-      }
-    | undefined;
+  readonly connection?: ServerConnection | undefined;
 }
 
 export const isEnabled = (entry: ServerEntry): boolean =>
   entry.config.enabled !== false;
 
-const firstLine = (text: string): string => text.split("\n", 1)[0] ?? "";
+export const firstLine = (text: string): string => text.split("\n", 1)[0] ?? "";
 
 /** Short state for lists and reports. `withError` appends the first line of a failure. */
 export const describeState = (
   server: ServerStatus,
   withError = true
 ): string => {
+  const { connection } = server;
+
   if (!isEnabled(server.entry)) {
     return "disabled";
   }
 
-  const { connection } = server;
+  switch (connection?.state) {
+    case undefined: {
+      return "starting";
+    }
 
-  if (!connection) {
-    return "starting";
-  }
-
-  switch (connection.state) {
     case "needs-auth": {
       return "needs sign-in";
     }
@@ -49,20 +42,58 @@ export const describeState = (
 
     case "connected": {
       const count = connection.tools.length;
-      const resources = connection.hasResources ? " · resources" : "";
 
-      return `connected · ${count} tool${count === 1 ? "" : "s"}${resources}`;
+      return `connected · ${count} tool${count === 1 ? "" : "s"}${connection.hasResources ? " · resources" : ""}`;
     }
 
     case "connecting": {
       return "connecting…";
     }
 
-    case "disconnected":
+    case "disconnected": {
+      return "disconnected, reconnects on next call";
+    }
+
     case "closed": {
-      return connection.state;
+      return "closed";
     }
   }
+};
+
+/** The negotiated protocol version, marked when it is the stateless 2026-07-28 era. */
+export const describeProtocol = (server: ServerStatus): string | undefined => {
+  const version = server.connection?.protocolVersion;
+
+  if (version === undefined || version === "") {
+    return undefined;
+  }
+
+  return server.connection?.era === "modern"
+    ? `${version} (stateless)`
+    : version;
+};
+
+/** A server's status as one line of plain text, with its full error indented below. */
+export const statusLine = (server: ServerStatus): string => {
+  const { name } = server.entry;
+  const exposure = serverExposure(server.entry.config);
+  const { connection } = server;
+
+  if (connection?.state === "needs-auth") {
+    return `${name}: needs sign-in, run /mcp login ${name} (${exposure})`;
+  }
+
+  const protocol = describeProtocol(server);
+
+  const failure =
+    connection?.state === "connected" ? undefined : connection?.error;
+
+  const error =
+    failure === undefined || failure === ""
+      ? ""
+      : `\n    ${failure.split("\n").join("\n    ")}`;
+
+  return `${name}: ${describeState(server, false)}${protocol === undefined ? "" : `, protocol ${protocol}`} (${exposure})${error}`;
 };
 
 /** Servers that need the user sort first. */

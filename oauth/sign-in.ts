@@ -26,6 +26,7 @@ import { planClient } from "./identity.ts";
 import type { ClientPlan } from "./identity.ts";
 import { listenOnLoopback } from "./loopback.ts";
 import type { LoopbackListener } from "./loopback.ts";
+import { storedTokens } from "./store.ts";
 import type { ServerCredentials, StoredServerAuth } from "./store.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -55,13 +56,12 @@ export interface SignInOptions {
   readonly challenge?: OAuthChallenge | undefined;
   readonly prompt: SignInPrompt;
   readonly signal: AbortSignal;
-  readonly fetch?: FetchLike | undefined;
 }
 
 const boundedFetch =
-  (signal: AbortSignal, base: FetchLike = fetch): FetchLike =>
+  (signal: AbortSignal): FetchLike =>
   async (input, init) =>
-    await base(input, {
+    await fetch(input, {
       ...init,
       signal: AbortSignal.any([
         signal,
@@ -292,16 +292,12 @@ class SignInProvider implements OAuthClientProvider {
   }
 
   async saveTokens(tokens: StoredOAuthTokens): Promise<void> {
-    const expiresAt =
-      tokens.expires_in === undefined
-        ? undefined
-        : Date.now() + tokens.expires_in * 1000;
-
     const { discovery } = this;
+
     await this.options.credentials.update((current) => ({
       ...current,
-      tokens: { ...tokens, expiresAt },
-      ...(discovery ? { discovery } : {}),
+      tokens: storedTokens(tokens),
+      ...(discovery === undefined ? {} : { discovery }),
     }));
   }
 
@@ -424,7 +420,7 @@ const throwIfCancelled = (signal: AbortSignal): void => {
  */
 export const signIn = async (options: SignInOptions): Promise<void> => {
   const { signal } = options;
-  const fetchFn = boundedFetch(signal, options.fetch);
+  const fetchFn = boundedFetch(signal);
   const discovery = await discover(options, fetchFn);
   throwIfCancelled(signal);
 

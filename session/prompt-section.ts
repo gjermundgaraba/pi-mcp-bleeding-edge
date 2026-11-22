@@ -1,6 +1,8 @@
+import { mcpNamespace, mcpServerSummary } from "@earendil-works/pi-mcp";
+
 import { configuredExposures } from "../config/exposure.ts";
 import type { ServerEntry } from "../config/load.ts";
-import { mcpNamespace, serverSummary } from "../tools/naming.ts";
+import { isEnabled } from "./status.ts";
 
 /** Name of the system prompt section listing the servers whose tools are not declared. */
 export const MCP_SERVERS_SECTION = "mcp_servers";
@@ -65,7 +67,7 @@ export const renderServersSection = (
 ): string | undefined => {
   const listed = servers
     .filter((server) => {
-      if (server.entry.config.enabled === false) {
+      if (!isEnabled(server.entry)) {
         return false;
       }
 
@@ -114,7 +116,7 @@ export const renderServersSection = (
     const summary =
       perServer > 0
         ? truncate(
-            serverSummary(
+            mcpServerSummary(
               server.entry.config.description,
               server.connection?.instructions
             ),

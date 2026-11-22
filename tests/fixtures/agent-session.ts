@@ -11,22 +11,31 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentSession,
+  ExtensionFactory,
+} from "@earendil-works/pi-coding-agent";
 
 import { createMcpExtension } from "../../index.ts";
 import { mcpPaths } from "../../paths.ts";
 
-/** A real pi session with this extension and codemode, answering with scripted responses. */
+/** A real pi session answering with scripted responses. */
 export interface SessionUnderTest {
   readonly session: AgentSession;
   readonly agentDir: string;
+  readonly cwd: string;
   readonly respond: (responses: FauxResponseStep[]) => void;
   readonly dispose: () => Promise<void>;
 }
 
+/**
+ * Start a session whose `mcp.json` lists `mcpServers`, with codemode and `extensions`: by default
+ * this extension.
+ */
 export const startSession = async (
   dir: string,
-  mcpServers: JsonObject
+  mcpServers: JsonObject,
+  extensions?: (agentDir: string) => ExtensionFactory[]
 ): Promise<SessionUnderTest> => {
   const agentDir = path.join(dir, "agent");
   const cwd = path.join(dir, "project");
@@ -59,7 +68,12 @@ export const startSession = async (
     cwd,
     extensionFactories: [
       createCodemodeExtension({ mode: "on" }),
-      createMcpExtension({ paths: mcpPaths(agentDir), startupWaitMs: 20_000 }),
+      ...(extensions?.(agentDir) ?? [
+        createMcpExtension({
+          paths: mcpPaths(agentDir),
+          startupWaitMs: 20_000,
+        }),
+      ]),
     ],
     noPromptTemplates: true,
     noSkills: true,
@@ -84,6 +98,7 @@ export const startSession = async (
   return {
     session,
     agentDir,
+    cwd,
     respond: (responses) => {
       faux.setResponses(responses);
     },

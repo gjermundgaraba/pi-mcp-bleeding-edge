@@ -22,7 +22,7 @@ On 2026-07-28 connections, tool list changes arrive on a `subscriptions/listen` 
 
 `/mcp` → Sign in, or `/mcp login <server>`, runs the OAuth sign-in through the SDK: protected resource and authorization server discovery, pi's Client ID Metadata Document or dynamic client registration, PKCE, RFC 9207 `iss` validation, and a loopback callback or a pasted redirect URL. A server that asks for more scope (`insufficient_scope`) asks for a new sign-in.
 
-Credentials are stored in `<agent dir>/data/mcp-bleeding-edge/auth.json`, not in the built-in support's `mcp-auth.json`, so each server needs one new sign-in. Refreshes are shared between pi processes through a lock file.
+Credentials are stored in `<agent dir>/data/mcp-bleeding-edge/auth/`, one file per server name and URL, not in the built-in support's `mcp-auth.json`, so each server needs one new sign-in. A file that cannot be read counts as signed out and affects no other server; the next sign-in replaces it. Refreshes are shared between pi processes through a lock file.
 
 ## Logs
 

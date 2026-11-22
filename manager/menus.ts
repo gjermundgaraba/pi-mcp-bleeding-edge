@@ -4,23 +4,18 @@ import type { SelectItem } from "@earendil-works/pi-tui";
 import { serverExposure, toolExposure } from "../config/exposure.ts";
 import type { McpExposure } from "../config/exposure.ts";
 import { openUrl } from "../open-url.ts";
-import { reconnectServer } from "../session/controller.ts";
 import type { McpSession, ServerSlot } from "../session/controller.ts";
 import {
   attentionRank,
+  describeProtocol,
   describeState,
   describeTransport,
+  firstLine,
   isEnabled,
 } from "../session/status.ts";
 import type { McpMenu, McpUi } from "./view.ts";
 
 type ReachableExposure = Exclude<McpExposure, "hidden">;
-
-const REACHABLE_EXPOSURES: readonly ReachableExposure[] = [
-  "codemode",
-  "deferred",
-  "direct",
-];
 
 const EXPOSURE_DESCRIPTIONS: Readonly<Record<ReachableExposure, string>> = {
   codemode: "called from codemode scripts, which find them with searchTools()",
@@ -29,17 +24,13 @@ const EXPOSURE_DESCRIPTIONS: Readonly<Record<ReachableExposure, string>> = {
   direct: "declared to the model like built-in tools",
 };
 
-const firstLine = (text: string): string => text.split("\n", 1)[0] ?? "";
+const REACHABLE_EXPOSURES: readonly ReachableExposure[] = [
+  "codemode",
+  "deferred",
+  "direct",
+];
 
-const protocolLabel = (slot: ServerSlot): string | undefined => {
-  const version = slot.connection?.protocolVersion;
-
-  if (version === undefined || version === "") {
-    return undefined;
-  }
-
-  return slot.connection?.era === "modern" ? `${version} (stateless)` : version;
-};
+const IN_PROJECT_SAVED = "saved to the project mcp.json";
 
 const savedWhere = (slot: ServerSlot): string => {
   if (slot.entry.scope === "extension") {
@@ -48,32 +39,111 @@ const savedWhere = (slot: ServerSlot): string => {
 
   return slot.entry.override === undefined
     ? `saved to the ${slot.entry.scope} mcp.json`
-    : "saved to the project mcp.json";
+    : IN_PROJECT_SAVED;
 };
 
-const serversMenu = (session: McpSession): McpMenu => ({
-  title: "MCP servers",
-  error: session.notices().join("\n") || undefined,
-  items: session.servers
-    .toSorted(
-      (a, b) =>
-        attentionRank(a) - attentionRank(b) ||
-        a.entry.name.localeCompare(b.entry.name)
-    )
-    .map((slot) => ({
-      value: slot.entry.name,
-      label: slot.entry.name,
-      description: `${describeState(slot)} · ${serverExposure(slot.entry.config)} · ${slot.entry.override === undefined ? slot.entry.scope : "global, project override"}`,
-    })),
-  empty: `No MCP servers configured. Add them to ${session.paths.globalConfig} or .pi/mcp.json.`,
-  confirmLabel: "manage",
-  cancelLabel: "close",
-});
+const serversMenu = (session: McpSession): McpMenu => {
+  const { registry } = session;
+
+  return {
+    title: "MCP servers",
+    error: registry.notices().join("\n") || undefined,
+    items: registry.servers
+      .toSorted(
+        (a, b) =>
+          attentionRank(a) - attentionRank(b) ||
+          a.entry.name.localeCompare(b.entry.name)
+      )
+      .map((slot) => ({
+        value: slot.entry.name,
+        label: slot.entry.name,
+        description: `${describeState(slot)} · ${serverExposure(slot.entry.config)} · ${slot.entry.override === undefined ? slot.entry.scope : "global, project override"}`,
+      })),
+    empty: `No MCP servers configured. Add them to ${registry.paths.globalConfig} or .pi/mcp.json.`,
+    confirmLabel: "manage",
+    cancelLabel: "close",
+  };
+};
+
+const actionsOf = (slot: ServerSlot, inProject: boolean): SelectItem[] => {
+  const saved = savedWhere(slot);
+
+  if (!isEnabled(slot.entry)) {
+    return [
+      { value: "enable", label: "Enable", description: saved },
+      ...(inProject
+        ? [
+            {
+              value: "enable-project",
+              label: "Enable in this project",
+              description: IN_PROJECT_SAVED,
+            },
+          ]
+        : []),
+    ];
+  }
+
+  const { connection } = slot;
+  const state = connection?.state;
+  const items: SelectItem[] = [];
+
+  if (state === "needs-auth") {
+    items.push({
+      value: "signin",
+      label: "Sign in",
+      description: "opens the browser",
+    });
+  }
+
+  if (state === "connected") {
+    items.push({
+      value: "tools",
+      label: "Tools",
+      description: `${connection?.tools.length ?? 0} offered`,
+    });
+  }
+
+  if (
+    state === "failed" ||
+    state === "disconnected" ||
+    state === "connected" ||
+    state === "needs-auth"
+  ) {
+    items.push({ value: "reconnect", label: "Reconnect" });
+  }
+
+  if (state === "connected" && connection?.oauthUrl !== undefined) {
+    items.push({
+      value: "signout",
+      label: "Sign out",
+      description: "deletes the stored credentials",
+    });
+  }
+
+  items.push(
+    {
+      value: "exposure",
+      label: "Exposure",
+      description: serverExposure(slot.entry.config),
+    },
+    { value: "disable", label: "Disable", description: saved }
+  );
+
+  if (inProject) {
+    items.push({
+      value: "disable-project",
+      label: "Disable in this project",
+      description: IN_PROJECT_SAVED,
+    });
+  }
+
+  return items;
+};
 
 const serverMenu = (session: McpSession, name: string): McpMenu => {
-  const slot = session.find(name);
+  const slot = session.registry.find(name);
 
-  if (!slot) {
+  if (slot === undefined) {
     return {
       title: name,
       items: [],
@@ -85,81 +155,13 @@ const serverMenu = (session: McpSession, name: string): McpMenu => {
 
   const { entry, connection } = slot;
 
-  const saved = savedWhere(slot);
-
   const inProject =
     entry.scope === "global" &&
     entry.override === undefined &&
-    session.projectConfig !== undefined;
+    session.registry.projectConfig !== undefined;
 
-  const inProjectSaved = "saved to the project mcp.json";
-  const items: SelectItem[] = [];
-
-  if (isEnabled(entry)) {
-    const state = connection?.state;
-
-    if (state === "needs-auth") {
-      items.push({
-        value: "signin",
-        label: "Sign in",
-        description: "opens the browser",
-      });
-    }
-
-    if (state === "connected" && connection) {
-      items.push({
-        value: "tools",
-        label: "Tools",
-        description: `${connection.tools.length} offered`,
-      });
-    }
-
-    if (
-      state === "failed" ||
-      state === "disconnected" ||
-      state === "connected" ||
-      state === "needs-auth"
-    ) {
-      items.push({ value: "reconnect", label: "Reconnect" });
-    }
-
-    if (state === "connected" && connection?.oauthUrl !== undefined) {
-      items.push({
-        value: "signout",
-        label: "Sign out",
-        description: "deletes the stored credentials",
-      });
-    }
-
-    items.push(
-      {
-        value: "exposure",
-        label: "Exposure",
-        description: serverExposure(entry.config),
-      },
-      { value: "disable", label: "Disable", description: saved }
-    );
-
-    if (inProject) {
-      items.push({
-        value: "disable-project",
-        label: "Disable in this project",
-        description: inProjectSaved,
-      });
-    }
-  } else {
-    items.push({ value: "enable", label: "Enable", description: saved });
-
-    if (inProject) {
-      items.push({
-        value: "enable-project",
-        label: "Enable in this project",
-        description: inProjectSaved,
-      });
-    }
-  }
-
-  const protocol = protocolLabel(slot);
+  const items = actionsOf(slot, inProject);
+  const protocol = describeProtocol(slot);
 
   const details = [
     describeTransport(entry),
@@ -175,13 +177,13 @@ const serverMenu = (session: McpSession, name: string): McpMenu => {
     slot.message,
     connection?.state === "connected" ? undefined : connection?.error,
   ]
-    .filter((line): line is string => line !== undefined)
+    .filter((line): line is string => line !== undefined && line !== "")
     .join("\n");
 
   return {
     title: `MCP server ${name}`,
     details: details.join("\n"),
-    error: error || undefined,
+    error: error === "" ? undefined : error,
     items,
     selected: items[0]?.value,
     confirmLabel: "select",
@@ -223,7 +225,6 @@ const chooseExposure = async (
   slot: ServerSlot
 ): Promise<string | undefined> => {
   const current = serverExposure(slot.entry.config);
-  const exposures = REACHABLE_EXPOSURES;
 
   const choice = await ui.menu(() => ({
     title: `Exposure of ${slot.entry.name}`,
@@ -231,7 +232,7 @@ const chooseExposure = async (
       slot.entry.scope === "extension"
         ? `Applies to this session; the server is registered by ${slot.entry.source}.`
         : `Saved to ${slot.entry.override ?? slot.entry.source}.`,
-    items: exposures.map((exposure) => ({
+    items: REACHABLE_EXPOSURES.map((exposure) => ({
       value: exposure,
       label: `${exposure === current ? "✓ " : "  "}${exposure}`,
       description: EXPOSURE_DESCRIPTIONS[exposure],
@@ -241,13 +242,13 @@ const chooseExposure = async (
     cancelLabel: "back",
   }));
 
-  const exposure = exposures.find((candidate) => candidate === choice);
+  const exposure = REACHABLE_EXPOSURES.find(
+    (candidate) => candidate === choice
+  );
 
-  if (!exposure || exposure === current) {
-    return undefined;
-  }
-
-  return await session.setExposure(slot, exposure);
+  return exposure === undefined || exposure === current
+    ? undefined
+    : await session.registry.setExposure(slot, exposure);
 };
 
 /** Sign in on the manager's sign-in screen, which shows the URL with a copy key and cancels with Esc. */
@@ -259,13 +260,14 @@ export const signInWithUi = async (
   const title = `Sign in to ${slot.entry.name}`;
   const cancel = new AbortController();
 
-  const status = (message: string) => {
+  const status = (message: string): void => {
     ui.status(title, message, () => {
       cancel.abort();
     });
   };
 
   let authorizationUrl = "";
+
   status("Contacting the authorization server…");
 
   return await session.signIn(
@@ -277,6 +279,7 @@ export const signInWithUi = async (
       },
       promptForRedirectUrl: async (signal) => {
         const value = await ui.redirectUrl(title, authorizationUrl, signal);
+
         status("Connecting…");
 
         return value;
@@ -293,36 +296,42 @@ const runAction = async (
   slot: ServerSlot,
   action: string
 ): Promise<void> => {
-  let message: string | undefined;
+  const { registry } = session;
 
   switch (action) {
     case "signin": {
-      message = await signInWithUi(ui, session, slot);
-      break;
+      session.report(ctx, slot, await signInWithUi(ui, session, slot));
+
+      return;
     }
 
     case "reconnect": {
-      session.runInBackground(ctx, slot, async () => {
-        await reconnectServer(slot);
+      session.runInBackground(
+        ctx,
+        slot,
+        async () => await registry.reconnect(slot)
+      );
 
-        return undefined;
-      });
-      break;
+      return;
     }
 
     case "signout": {
       await session.signOut(slot);
-      break;
+      session.report(ctx, slot, undefined);
+
+      return;
     }
 
     case "tools": {
       await showTools(ui, slot);
-      break;
+
+      return;
     }
 
     case "exposure": {
-      message = await chooseExposure(ui, session, slot);
-      break;
+      session.report(ctx, slot, await chooseExposure(ui, session, slot));
+
+      return;
     }
 
     case "enable":
@@ -330,21 +339,21 @@ const runAction = async (
     case "enable-project":
     case "disable-project": {
       const enable = action.startsWith("enable");
+
       session.runInBackground(
         ctx,
         slot,
         async () =>
-          await session.setEnabled(slot, enable, action.endsWith("-project"))
+          await registry.setEnabled(slot, enable, action.endsWith("-project"))
       );
-      break;
+
+      return;
     }
 
     default: {
       return;
     }
   }
-
-  session.settleAction(ctx, slot, message);
 };
 
 /** The manager's flow: the server list, then one server's actions, until closed. */
@@ -353,7 +362,8 @@ export const manageServers = async (
   ctx: ExtensionContext,
   session: McpSession
 ): Promise<void> => {
-  const subscribe = (listener: () => void) => session.subscribe(listener);
+  const subscribe = (listener: () => void) =>
+    session.registry.subscribe(listener);
 
   for (;;) {
     const name = await ui.menu(() => serversMenu(session), subscribe);
@@ -364,7 +374,7 @@ export const manageServers = async (
 
     for (;;) {
       const action = await ui.menu(() => serverMenu(session, name), subscribe);
-      const slot = session.find(name);
+      const slot = session.registry.find(name);
 
       if (action === undefined || action === "" || slot === undefined) {
         break;

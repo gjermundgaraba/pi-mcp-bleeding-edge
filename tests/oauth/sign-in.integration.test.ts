@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { ServerConnection } from "../../connection/connection.ts";
 import { ProtocolVerdicts } from "../../connection/era.ts";
-import { createTransport } from "../../connection/transport.ts";
 import type { SignInPrompt } from "../../oauth/sign-in.ts";
 import { SessionAuth } from "../../session/auth.ts";
 import { fixtureEntry, temporaryDirectory } from "../fixtures/connection.ts";
@@ -54,14 +53,13 @@ const setUp = async (): Promise<{
 }> => {
   const { dir, dispose } = temporaryDirectory();
   const oauth = await startOAuthServer();
-  const auth = new SessionAuth(path.join(dir, "auth.json"));
+  const auth = new SessionAuth(path.join(dir, "auth"));
   const entry = fixtureEntry({ url: oauth.url });
 
   const connection = new ServerConnection({
     entry,
     cwd: dir,
     verdictKey: "fixture",
-    createTransport,
     auth: auth.connectionAuth(entry),
     verdicts: new ProtocolVerdicts(path.join(dir, "protocol.json")),
     log: undefined,

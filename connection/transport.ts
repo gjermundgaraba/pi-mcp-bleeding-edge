@@ -8,13 +8,6 @@ import type { ServerEntry } from "../config/load.ts";
 import { isHttpConfig } from "../config/schema.ts";
 import { expandHome, resolveConfigValues } from "../config/values.ts";
 
-/** Opens the transport of a server. Tests replace it to reach servers in memory. */
-export type TransportFactory = (
-  entry: ServerEntry,
-  cwd: string,
-  auth: AuthProvider | undefined
-) => Transport;
-
 const inheritedEnvironment = (): Record<string, string> =>
   Object.fromEntries(
     Object.entries(process.env).flatMap(([key, value]) =>
@@ -28,7 +21,11 @@ const inheritedEnvironment = (): Record<string, string> =>
  * Stdio for `command` servers, in pi's environment plus the resolved `env`, with `~` expanded
  * and a relative `cwd` resolved against the session's directory.
  */
-export const createTransport: TransportFactory = (entry, cwd, auth) => {
+export const createTransport = (
+  entry: ServerEntry,
+  cwd: string,
+  auth: AuthProvider | undefined
+): Transport => {
   const { config, name } = entry;
 
   if (isHttpConfig(config)) {
@@ -40,7 +37,7 @@ export const createTransport: TransportFactory = (entry, cwd, auth) => {
     return new StreamableHTTPClientTransport(new URL(config.url), {
       requestInit: { headers },
       onInsufficientScope: "throw",
-      ...(auth ? { authProvider: auth } : {}),
+      ...(auth === undefined ? {} : { authProvider: auth }),
     });
   }
 

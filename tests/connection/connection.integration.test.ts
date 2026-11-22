@@ -186,7 +186,7 @@ describe("ServerConnection over stdio", () => {
     );
 
     const failed = await connection.callTool("fail", {}, {});
-    const resources = await connection.allResources({});
+    const { resources } = await connection.listResources(undefined, {});
     const read = await connection.readResource("notes://first", {});
 
     expect(textOf(counted)).toBe("counted to 3");

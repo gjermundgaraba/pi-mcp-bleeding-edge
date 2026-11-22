@@ -2,6 +2,7 @@ import type {
   ExtensionAPI,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { createMcpToolName, mcpNamespace } from "@earendil-works/pi-mcp";
 import type { TSchema } from "typebox";
 
 import { serverExposure, toolExposure } from "../config/exposure.ts";
@@ -10,7 +11,6 @@ import type { ServerEntry } from "../config/load.ts";
 import type { ServerConnection } from "../connection/connection.ts";
 import { createToolDefinition } from "../tools/definition.ts";
 import type { McpToolDetails, ToolCaller } from "../tools/definition.ts";
-import { mcpNamespace, mcpToolName } from "../tools/naming.ts";
 import { createResourceToolDefinitions } from "../tools/resources.ts";
 import type { ResourceServer } from "../tools/resources.ts";
 
@@ -74,13 +74,13 @@ export class ToolCatalog {
     const current = new Set<string>();
 
     const plain = [...new Set(connection.tools.map((tool) => tool.name))].map(
-      (tool) => mcpToolName(server, tool)
+      (tool) => createMcpToolName(server, tool)
     );
 
     for (const tool of connection.tools) {
       const owner = `${server}\0${tool.name}`;
 
-      const name = mcpToolName(server, tool.name, (candidate) => {
+      const name = createMcpToolName(server, tool.name, (candidate) => {
         const existing = this.owners.get(candidate);
 
         return (

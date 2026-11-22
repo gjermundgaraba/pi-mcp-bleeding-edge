@@ -5,18 +5,20 @@ This repository is a pi extension that replaces pi's built-in MCP support with a
 ## Layout
 
 - `index.ts` registers the extension: `createMcpExtension(options)`, and the default export pi loads.
-- `config/` reads, validates (zod), and edits `mcp.json` entries.
-- `connection/` owns one server's SDK client: transports, protocol era negotiation and the verdict cache, error classification.
-- `oauth/` holds the credential store, client identity choice, loopback callback, sign-in through the SDK's `auth()`, and the refresh-only auth of connections.
-- `tools/` turns MCP tools, results, and resources into pi tools and renderers.
-- `session/` coordinates one pi session: server slots, the tool catalog, codemode and tool_search activation, the `mcp_servers` prompt section. `session/runtime.ts` is loaded lazily, so sessions without servers never load the SDK.
+- `config/` reads and edits `mcp.json`. pi-mcp's `validateMcpServerConfig` checks the shared `mcpServers` fields, as pi does; zod checks this extension's own (`exposure`, `toolExposure`, `protocol`, `auth`).
+- `connection/` owns one server's SDK client: connecting with era negotiation and the verdict cache, readiness (`start`, `settled`, `reconnect`), paged resource listing, error classification.
+- `oauth/` holds the per-server credential files, client identity choice, loopback callback, sign-in through the SDK's `auth()`, and the refresh-only auth of connections.
+- `tools/` turns MCP tools, results, and resources into pi tools and renderers. Naming, output truncation, and input-schema normalization come from pi-mcp, so they match pi exactly.
+- `session/registry.ts` owns a session's servers: slots, connections, the tool catalog, and the enable, exposure, and reconnect actions. `session/controller.ts` holds the pi hooks: startup, waiting for servers, the `mcp_servers` prompt section, sign-ins.
 - `manager/` is the `/mcp` command and its TUI.
 
 ## Conventions
 
 - Behavior follows pi's built-in MCP extension unless the 2026-07-28 specification calls for something else; `docs/configuration.md` lists the differences. Keep it current.
-- Parse external data (config files, stored state, server payloads) with zod at the boundary; do not add type assertions or `typeof` checks.
-- JSDoc goes on exported declarations; comments elsewhere only for links to upstream issues or specs.
+- `@earendil-works/pi-mcp` is pinned to the version of `@earendil-works/pi-coding-agent`; bump them together. Use it for what must match pi, not for the client.
+- Parse data that crosses a trust boundary (config files, stored files, configured documents) with zod. Inside the extension plain `typeof` checks and records are fine. `tools/json.ts` is the one place an MCP value is typed as the JSON it was parsed from.
+- Write this extension's data files with `writePrivateJsonFile` (`json-file.ts`); never rewrite the user's `mcp.json` atomically, which would replace a symlink.
+- JSDoc goes on exported declarations; comments elsewhere say why code is unusual, or link upstream.
 
 ## Commands
 
@@ -26,7 +28,7 @@ This repository is a pi extension that replaces pi's built-in MCP support with a
 
 ## Tests
 
-Unit tests sit under `tests/` mirroring the source. Integration tests (`*.integration.test.ts`) run real servers from `tests/fixtures/`: the v2 SDK server over stdio and HTTP for both eras, v1 SDK servers for 2025-only behavior, a fake OAuth authorization server, and a real pi `AgentSession` with the faux provider.
+Unit tests sit under `tests/` mirroring the source. Integration tests (`*.integration.test.ts`) run real servers from `tests/fixtures/`: the v2 SDK server over stdio and HTTP for both eras, v1 SDK servers for 2025-only behavior and resource paging, a fake OAuth authorization server, and real pi `AgentSession`s with the faux provider. Registry tests give a `ServerRegistry` the extension API of a probe extension in a real session.
 
 ## References
 

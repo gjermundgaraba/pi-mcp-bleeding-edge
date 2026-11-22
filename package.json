@@ -8,24 +8,13 @@
     "pi-package"
   ],
   "license": "MIT",
-  "files": [
-    "*.ts",
-    "config/*.ts",
-    "connection/*.ts",
-    "oauth/*.ts",
-    "tools/*.ts",
-    "manager/*.ts",
-    "docs/*.md",
-    "README.md",
-    "LICENSE",
-    "!**/*.test.ts"
-  ],
   "type": "module",
   "exports": "./index.ts",
   "scripts": {
     "prepare": "vp config"
   },
   "dependencies": {
+    "@earendil-works/pi-mcp": "1.6.0",
     "@modelcontextprotocol/client": "2.4.0",
     "proper-lockfile": "4.1.2",
     "zod": "4.6.7"

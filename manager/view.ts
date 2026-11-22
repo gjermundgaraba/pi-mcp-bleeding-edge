@@ -26,6 +26,8 @@ import type {
   TUI,
 } from "@earendil-works/pi-tui";
 
+import { errorMessage } from "../connection/errors.ts";
+
 /** One screen of the manager. */
 export interface McpMenu {
   readonly title: string;
@@ -155,12 +157,7 @@ class AuthorizationLink extends Container {
       await copyToClipboard(this.url);
       this.setHint(this.theme.fg("success", "Copied URL to clipboard"));
     } catch (error) {
-      this.setHint(
-        this.theme.fg(
-          "error",
-          error instanceof Error ? error.message : String(error)
-        )
-      );
+      this.setHint(this.theme.fg("error", errorMessage(error)));
     }
   }
 
@@ -468,10 +465,7 @@ export const showMcpManager = async (
       try {
         await manage(view);
       } catch (error) {
-        ctx.ui.notify(
-          error instanceof Error ? error.message : String(error),
-          "error"
-        );
+        ctx.ui.notify(errorMessage(error), "error");
       } finally {
         done(undefined);
       }
