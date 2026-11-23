@@ -1,10 +1,9 @@
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
-import type { ServerEntry } from "../config/load.ts";
 import { isHttpConfig } from "../config/schema.ts";
 import type { McpHttpServerConfig } from "../config/schema.ts";
 import { resolveConfigValue } from "../config/values.ts";
-import type { ConnectionAuth } from "../connection/connection.ts";
+import type { ConnectionAuth, ServerTarget } from "../connection/connection.ts";
 import { createOAuthConnectionAuth } from "../oauth/connection-auth.ts";
 import type { OAuthChallenge } from "../oauth/errors.ts";
 import { signIn } from "../oauth/sign-in.ts";
@@ -12,7 +11,7 @@ import type { SignInPrompt } from "../oauth/sign-in.ts";
 import { ServerCredentials } from "../oauth/store.ts";
 
 /** HTTP servers sign in with OAuth unless they send an `Authorization` header or a provider's token. */
-const oauthConfig = (entry: ServerEntry): McpHttpServerConfig | undefined => {
+const oauthConfig = (entry: ServerTarget): McpHttpServerConfig | undefined => {
   const { config } = entry;
 
   if (!isHttpConfig(config) || config.auth !== undefined) {
@@ -27,7 +26,7 @@ const oauthConfig = (entry: ServerEntry): McpHttpServerConfig | undefined => {
 };
 
 const clientSecret = (
-  entry: ServerEntry,
+  entry: ServerTarget,
   config: McpHttpServerConfig
 ): string | undefined => {
   const secret = config.oauth?.clientSecret;
@@ -55,7 +54,7 @@ export class SessionAuth {
   }
 
   /** How a new connection to the server authenticates. */
-  connectionAuth(entry: ServerEntry): ConnectionAuth | undefined {
+  connectionAuth(entry: ServerTarget): ConnectionAuth | undefined {
     const { config } = entry;
 
     if (isHttpConfig(config) && config.auth !== undefined) {
@@ -66,7 +65,7 @@ export class SessionAuth {
           token: async () =>
             await this.modelRegistry?.getApiKeyForProvider(provider),
         },
-        signInCommand: `/login ${provider}`,
+        signInHint: `Run /login ${provider} to sign in.`,
       };
     }
 
@@ -94,12 +93,12 @@ export class SessionAuth {
       },
     });
 
-    return { provider, oauth: provider, signInCommand: "/mcp" };
+    return { provider, oauth: provider, signInHint: "Run /mcp to sign in." };
   }
 
   /** Run a sign-in to the server, saving the tokens for its connections. */
   async signIn(
-    entry: ServerEntry,
+    entry: ServerTarget,
     challenge: OAuthChallenge | undefined,
     prompt: SignInPrompt,
     signal: AbortSignal
@@ -122,7 +121,7 @@ export class SessionAuth {
   }
 
   /** Delete the server's stored credentials. Resolves to whether there were any. */
-  async signOut(entry: ServerEntry): Promise<boolean> {
+  async signOut(entry: ServerTarget): Promise<boolean> {
     const oauth = oauthConfig(entry);
 
     return oauth === undefined
@@ -131,7 +130,7 @@ export class SessionAuth {
   }
 
   /** The stored tokens as text, to notice sign-ins made by other pi processes. */
-  storedTokens(entry: ServerEntry): string {
+  storedTokens(entry: ServerTarget): string {
     const oauth = oauthConfig(entry);
 
     return JSON.stringify(
@@ -142,7 +141,7 @@ export class SessionAuth {
   }
 
   private credentials(
-    entry: ServerEntry,
+    entry: ServerTarget,
     config: McpHttpServerConfig
   ): ServerCredentials {
     return new ServerCredentials(this.directory, entry.name, config.url);

@@ -16,6 +16,7 @@ import { toPiExposure } from "../config/exposure.ts";
 import type { McpExposure } from "../config/exposure.ts";
 import type { CallOptions } from "../connection/connection.ts";
 import { errorMessage } from "../connection/errors.ts";
+import { writeOutputFile } from "../output-files.ts";
 import {
   limitContent,
   READ_MCP_RESOURCE_TOOL,
@@ -237,9 +238,10 @@ const jsonResult = async (
   server: string | undefined,
   payload: JsonValue
 ): Promise<AgentToolResult<McpToolDetails>> => {
-  const { content, fullOutputPath } = await limitContent([
-    { type: "text", text: JSON.stringify(payload) },
-  ]);
+  const { content, fullOutputPath } = await limitContent(
+    [{ type: "text", text: JSON.stringify(payload) }],
+    writeOutputFile
+  );
 
   return {
     content,
@@ -424,12 +426,15 @@ export const createResourceToolDefinitions = (options: {
         { type: "resource" as const, resource: contents },
       ]);
 
-      const converted = await toModelContent(server.name, blocks);
+      const converted = await toModelContent(server.name, blocks, {
+        saveOutput: writeOutputFile,
+      });
 
       const { content, fullOutputPath } = await limitContent(
         converted.length > 0
           ? converted
-          : [{ type: "text", text: `Resource ${uri} is empty.` }]
+          : [{ type: "text", text: `Resource ${uri} is empty.` }],
+        writeOutputFile
       );
 
       const contents = result.contents.map(

@@ -12,8 +12,8 @@ import type { TSchema } from "typebox";
 import { toPiExposure } from "../config/exposure.ts";
 import type { McpExposure } from "../config/exposure.ts";
 import type { CallOptions, ToolArguments } from "../connection/connection.ts";
-import { limitContent, toModelContent } from "./content.ts";
-import type { ModelContent } from "./content.ts";
+import { writeOutputFile } from "../output-files.ts";
+import { toolResultContent } from "./content.ts";
 import { asJsonValue } from "./json.ts";
 import { mcpToolRenderers } from "./render.ts";
 
@@ -129,30 +129,6 @@ export const resultSchema = (outputSchema: Tool["outputSchema"]): TSchema => ({
   additionalProperties: true,
 });
 
-const textOf = (content: readonly ModelContent[]): string =>
-  content
-    .flatMap((block) => (block.type === "text" ? [block.text] : []))
-    .join("\n");
-
-const modelContentOf = async (
-  server: string,
-  result: CallToolResult,
-  readableResources: boolean
-): Promise<ModelContent[]> => {
-  if (result.content.length > 0) {
-    return await toModelContent(server, result.content, readableResources);
-  }
-
-  return result.structuredContent === undefined
-    ? []
-    : [
-        {
-          type: "text",
-          text: JSON.stringify(result.structuredContent, null, 2),
-        },
-      ];
-};
-
 /**
  * A tool result for pi: model content within the output limit, and the whole result without
  * `_meta` as `structuredContent` for codemode scripts. `isError` results are errors for the model;
@@ -164,17 +140,14 @@ export const convertResult = async (
   result: CallToolResult,
   readableResources = false
 ): Promise<AgentToolResult<McpToolDetails>> => {
-  const converted = await modelContentOf(server, result, readableResources);
+  const { content, fullOutputPath } = await toolResultContent(
+    server,
+    tool,
+    result,
+    { readableResources, saveOutput: writeOutputFile }
+  );
+
   const isError = result.isError === true;
-
-  if (isError && textOf(converted) === "") {
-    converted.push({
-      type: "text",
-      text: `MCP tool ${server}/${tool} returned an error`,
-    });
-  }
-
-  const { content, fullOutputPath } = await limitContent(converted);
   const { _meta: _ignored, ...scriptResult } = result;
 
   return {

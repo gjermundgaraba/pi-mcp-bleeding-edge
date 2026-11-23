@@ -2,7 +2,6 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
-import { VERSION } from "@earendil-works/pi-coding-agent";
 import {
   Client,
   METHOD_NOT_FOUND,
@@ -12,9 +11,12 @@ import type {
   AuthProvider,
   CallToolRequestParams,
   CallToolResult,
+  FetchLike,
+  Implementation,
   ListResourcesResult,
   ListResourceTemplatesResult,
   McpSubscription,
+  OAuthClientProvider,
   PriorDiscovery,
   Progress,
   ProtocolEra,
@@ -59,13 +61,17 @@ export type ConnectionState =
   | "failed"
   | "closed";
 
+/** The server a connection reaches: its name and `mcp.json` entry. */
+export type ServerTarget = Pick<ServerEntry, "name" | "config">;
+
 /** How a connection authenticates, when it does. */
 export interface ConnectionAuth {
-  readonly provider: AuthProvider;
-  /** Set for servers that sign in with OAuth. */
+  /** Sends credentials; an `OAuthClientProvider` lets the SDK refresh its tokens. */
+  readonly provider: AuthProvider | OAuthClientProvider;
+  /** Set for servers that sign in with OAuth through this extension. */
   readonly oauth?: OAuthConnectionAuth | undefined;
-  /** What the user runs to sign in: `/mcp`, or `/login <provider>`. */
-  readonly signInCommand: string;
+  /** Tells the user how to sign in, such as "Run /mcp to sign in." */
+  readonly signInHint: string;
 }
 
 /** Options of a request to a server. */
@@ -75,16 +81,23 @@ export interface CallOptions {
 }
 
 export interface ConnectionOptions {
-  readonly entry: ServerEntry;
-  readonly cwd: string;
-  readonly verdictKey: string;
+  readonly entry: ServerTarget;
+  /** How the client introduces itself to the server. */
+  readonly clientInfo: Implementation;
+  /** Offered to the server as its root, and where stdio servers start. Without it the client offers no roots. */
+  readonly cwd?: string | undefined;
   readonly auth: ConnectionAuth | undefined;
-  readonly verdicts: ProtocolVerdicts;
+  /** Makes the HTTP requests of `url` servers; the global `fetch` without it. */
+  readonly fetch?: FetchLike | undefined;
+  /** Where the server's protocol era is remembered, under `key`. Without it every connect probes. */
+  readonly verdicts?:
+    | { readonly store: ProtocolVerdicts; readonly key: string }
+    | undefined;
   readonly log: ServerLog | undefined;
   /** Called when the server's tools were listed, at connect and after it announced a change. */
-  readonly onTools: (connection: ServerConnection) => void;
+  readonly onTools?: ((connection: ServerConnection) => void) | undefined;
   /** Called when `state`, `error`, or `tools` change. */
-  readonly onChange: (connection: ServerConnection) => void;
+  readonly onChange?: ((connection: ServerConnection) => void) | undefined;
 }
 
 const ignore = (): undefined => undefined;
@@ -102,7 +115,7 @@ const pageParams = (cursor: string | undefined): { cursor?: string } =>
  * next call; on the 2026-07-28 era a dropped subscription stream is opened again.
  */
 export class ServerConnection {
-  readonly entry: ServerEntry;
+  readonly entry: ServerTarget;
   state: ConnectionState = "connecting";
   error: string | undefined;
   tools: Tool[] = [];
@@ -360,9 +373,9 @@ export class ServerConnection {
   }
 
   private signInRequiredMessage(): string {
-    const command = this.options.auth?.signInCommand ?? "/mcp";
+    const hint = this.options.auth?.signInHint ?? "Run /mcp to sign in.";
 
-    return `MCP server "${this.name}" requires sign-in. Run ${command} to sign in.`;
+    return `MCP server "${this.name}" requires sign-in. ${hint}`;
   }
 
   private markNeedsAuth(challenge: OAuthChallenge | undefined): void {
@@ -376,7 +389,7 @@ export class ServerConnection {
   }
 
   private changed(): void {
-    this.options.onChange(this);
+    this.options.onChange?.(this);
   }
 
   private async dropClient(client: Client): Promise<void> {
@@ -420,10 +433,10 @@ export class ServerConnection {
   private async connectWithVerdict(): Promise<Client> {
     const preference = this.entry.config.protocol ?? "auto";
 
+    const { verdicts } = this.options;
+
     const prior =
-      preference === "auto"
-        ? this.options.verdicts.prior(this.options.verdictKey)
-        : undefined;
+      preference === "auto" ? verdicts?.store.prior(verdicts.key) : undefined;
 
     if (prior === undefined) {
       return await this.connectOnce(undefined);
@@ -436,7 +449,7 @@ export class ServerConnection {
         throw error;
       }
 
-      this.options.verdicts.forget(this.options.verdictKey);
+      verdicts?.store.forget(verdicts.key);
 
       return await this.connectOnce(undefined);
     }
@@ -448,29 +461,25 @@ export class ServerConnection {
       !isHttpConfig(this.entry.config)
     );
 
-    const client: Client = new Client(
-      { name: "pi", version: VERSION },
-      {
-        capabilities: { roots: {} },
-        ...(negotiation === undefined
-          ? {}
-          : { versionNegotiation: negotiation }),
-        listChanged: {
-          tools: {
-            onChanged: (error, tools) => {
-              this.toolsChanged(client, error, tools);
-            },
+    const { cwd } = this.options;
+
+    const client: Client = new Client(this.options.clientInfo, {
+      ...(cwd === undefined ? {} : { capabilities: { roots: {} } }),
+      ...(negotiation === undefined ? {} : { versionNegotiation: negotiation }),
+      listChanged: {
+        tools: {
+          onChanged: (error, tools) => {
+            this.toolsChanged(client, error, tools);
           },
         },
-      }
-    );
+      },
+    });
 
-    const root = {
-      uri: pathToFileURL(this.options.cwd).href,
-      name: path.basename(this.options.cwd),
-    };
+    if (cwd !== undefined) {
+      const root = { uri: pathToFileURL(cwd).href, name: path.basename(cwd) };
 
-    client.setRequestHandler("roots/list", () => ({ roots: [root] }));
+      client.setRequestHandler("roots/list", () => ({ roots: [root] }));
+    }
 
     const { log } = this.options;
 
@@ -509,7 +518,7 @@ export class ServerConnection {
     this.protocolVersion = client.getNegotiatedProtocolVersion();
     this.state = "connected";
     this.error = undefined;
-    this.options.onTools(this);
+    this.options.onTools?.(this);
     this.changed();
   }
 
@@ -527,11 +536,11 @@ export class ServerConnection {
     this.stderrTail = "";
 
     try {
-      const transport = createTransport(
-        this.entry,
-        this.options.cwd,
-        this.options.auth?.provider
-      );
+      const transport = createTransport(this.entry, {
+        cwd: this.options.cwd,
+        auth: this.options.auth?.provider,
+        fetch: this.options.fetch,
+      });
 
       if (transport instanceof StdioClientTransport) {
         this.collectStderr(transport);
@@ -558,8 +567,8 @@ export class ServerConnection {
       ) {
         const discover = client.getDiscoverResult();
 
-        this.options.verdicts.record(
-          this.options.verdictKey,
+        this.options.verdicts?.store.record(
+          this.options.verdicts.key,
           discover === undefined
             ? { kind: "legacy" }
             : { kind: "modern", discover }
@@ -646,7 +655,7 @@ export class ServerConnection {
       this.error = `Failed to refresh tools: ${error.message}`;
     } else if (tools !== null) {
       this.tools = tools;
-      this.options.onTools(this);
+      this.options.onTools?.(this);
     }
 
     this.changed();
