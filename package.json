@@ -1,5 +1,5 @@
 {
-  "name": "pi-mcp-bleeding-edge",
+  "name": "@gjermundgaraba/pi-mcp-bleeding-edge",
   "version": "0.1.0",
   "description": "Replaces pi's built-in MCP support with a client on the official MCP TypeScript SDK v2, speaking protocol 2026-07-28 and falling back to 2025-era servers.",
   "keywords": [
@@ -7,6 +7,10 @@
     "pi-package"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/pi-mcp-bleeding-edge.git"
+  },
   "files": [
     "*.ts",
     "!vite.config.ts",
@@ -33,7 +37,8 @@
         "default": "./dist/client.mjs"
       },
       "./package.json": "./package.json"
-    }
+    },
+    "access": "public"
   },
   "scripts": {
     "build": "vp pack",
