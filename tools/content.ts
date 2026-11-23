@@ -14,8 +14,6 @@ export const READ_MCP_RESOURCE_TOOL = "read_mcp_resource";
 /** Content a model accepts in tool results. */
 export type ModelContent = TextContent | ImageContent;
 
-export type { LimitedMcpContent, McpOutputSaver } from "@earendil-works/pi-mcp";
-
 /** How server content becomes model content. */
 export interface ContentOptions {
   /** Whether resource links name `read_mcp_resource`, the tool that reads them. */
@@ -23,15 +21,6 @@ export interface ContentOptions {
   /** Saves what the model is not shown in full, and returns where. Without it, that output is cut or omitted. */
   readonly saveOutput?: McpOutputSaver | undefined;
 }
-
-/**
- * Keep model-facing text within pi's MCP output limit, as pi does: longer text is cut in the middle,
- * and with `saveOutput` the full text is saved where the result names.
- */
-export const limitContent = async (
-  content: ModelContent[],
-  saveOutput?: McpOutputSaver
-): Promise<LimitedMcpContent> => await limitMcpContent(content, saveOutput);
 
 /** A byte count as pi shows it, such as `2.0KB`. */
 const formatSize = (bytes: number): string => {
@@ -193,7 +182,8 @@ const modelContentOf = async (
 };
 
 /**
- * Model-facing content of a tool result within the output limit. A result without content shows its
+ * Model-facing content of a tool result within pi's MCP output limit: longer text is cut in the
+ * middle, and with `saveOutput` the full text is saved where the result names. A result without content shows its
  * structured content, and an error without text says which tool failed.
  */
 export const toolResultContent = async (
@@ -215,5 +205,5 @@ export const toolResultContent = async (
     });
   }
 
-  return await limitContent(converted, options.saveOutput);
+  return await limitMcpContent(converted, options.saveOutput);
 };

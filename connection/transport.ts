@@ -1,16 +1,17 @@
 import path from "node:path";
 
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import type { Transport } from "@modelcontextprotocol/client";
+import type {
+  AuthProvider,
+  FetchLike,
+  OAuthClientProvider,
+  Transport,
+} from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 import { isHttpConfig } from "../config/schema.ts";
 import { expandHome, resolveConfigValues } from "../config/values.ts";
-import type {
-  ConnectionAuth,
-  ConnectionOptions,
-  ServerTarget,
-} from "./connection.ts";
+import type { ServerTarget } from "./connection.ts";
 
 const inheritedEnvironment = (): Record<string, string> =>
   Object.fromEntries(
@@ -31,8 +32,10 @@ export const createTransport = (
     cwd,
     auth,
     fetch,
-  }: Pick<ConnectionOptions, "cwd" | "fetch"> & {
-    readonly auth: ConnectionAuth["provider"] | undefined;
+  }: {
+    readonly cwd: string | undefined;
+    readonly auth: AuthProvider | OAuthClientProvider | undefined;
+    readonly fetch: FetchLike | undefined;
   }
 ): Transport => {
   const { config, name } = entry;

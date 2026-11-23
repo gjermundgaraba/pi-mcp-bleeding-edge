@@ -19,6 +19,8 @@ jobs:
           cache: true
           run-install: false
       - run: vp install --frozen-lockfile
+      - run: vp check
+      - run: vp test
       - name: Check that the tag names the package version
         run: test "$(jq -r .version package.json)" = "${GITHUB_REF_NAME#v}"
       # prepublishOnly builds dist; npm trusted publishing authenticates through the id-token.

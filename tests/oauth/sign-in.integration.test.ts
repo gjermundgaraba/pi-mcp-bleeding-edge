@@ -66,8 +66,6 @@ const setUp = async (): Promise<{
       key: "fixture",
     },
     log: undefined,
-    onTools: () => undefined,
-    onChange: () => undefined,
   });
 
   cleanups.push(dispose, oauth.close, async () => {

@@ -20,15 +20,8 @@ export { SignInRequiredError } from "./oauth/errors.ts";
 
 export type { OAuthChallenge } from "./oauth/errors.ts";
 
-export {
-  limitContent,
-  toModelContent,
-  toolResultContent,
-} from "./tools/content.ts";
+export { toModelContent, toolResultContent } from "./tools/content.ts";
 
-export type {
-  ContentOptions,
-  LimitedMcpContent,
-  McpOutputSaver,
-  ModelContent,
-} from "./tools/content.ts";
+export type { ContentOptions, ModelContent } from "./tools/content.ts";
+
+export type { LimitedMcpContent, McpOutputSaver } from "@earendil-works/pi-mcp";

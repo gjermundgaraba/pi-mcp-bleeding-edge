@@ -373,9 +373,10 @@ export class ServerConnection {
   }
 
   private signInRequiredMessage(): string {
-    const hint = this.options.auth?.signInHint ?? "Run /mcp to sign in.";
+    const hint = this.options.auth?.signInHint;
+    const message = `MCP server "${this.name}" requires sign-in.`;
 
-    return `MCP server "${this.name}" requires sign-in. ${hint}`;
+    return hint === undefined ? message : `${message} ${hint}`;
   }
 
   private markNeedsAuth(challenge: OAuthChallenge | undefined): void {

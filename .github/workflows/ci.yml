@@ -30,3 +30,5 @@ jobs:
       - run: vp check
       - run: vp test
       - run: vp pack
+      - name: Check that the client entry runs without pi's session packages
+        run: "! grep -E 'pi-coding-agent|pi-tui' dist/client.mjs"

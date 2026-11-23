@@ -12,22 +12,16 @@
     "url": "git+https://github.com/gjermundgaraba/pi-mcp-bleeding-edge.git"
   },
   "files": [
-    "*.ts",
+    "**/*.ts",
+    "!tests",
     "!vite.config.ts",
-    "config",
-    "connection",
-    "manager",
-    "oauth",
-    "session",
-    "tools",
     "dist",
     "docs"
   ],
   "type": "module",
   "exports": {
     ".": "./index.ts",
-    "./client": "./client.ts",
-    "./package.json": "./package.json"
+    "./client": "./client.ts"
   },
   "publishConfig": {
     "exports": {
@@ -35,8 +29,7 @@
       "./client": {
         "types": "./dist/client.d.mts",
         "default": "./dist/client.mjs"
-      },
-      "./package.json": "./package.json"
+      }
     },
     "access": "public"
   },

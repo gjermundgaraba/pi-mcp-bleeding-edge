@@ -3,6 +3,7 @@ import type {
   AgentToolResult,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { limitMcpContent } from "@earendil-works/pi-mcp";
 import type {
   ContentBlock,
   ListResourcesResult,
@@ -17,11 +18,7 @@ import type { McpExposure } from "../config/exposure.ts";
 import type { CallOptions } from "../connection/connection.ts";
 import { errorMessage } from "../connection/errors.ts";
 import { writeOutputFile } from "../output-files.ts";
-import {
-  limitContent,
-  READ_MCP_RESOURCE_TOOL,
-  toModelContent,
-} from "./content.ts";
+import { READ_MCP_RESOURCE_TOOL, toModelContent } from "./content.ts";
 import type { McpToolDetails } from "./definition.ts";
 import { asJsonValue } from "./json.ts";
 
@@ -238,7 +235,7 @@ const jsonResult = async (
   server: string | undefined,
   payload: JsonValue
 ): Promise<AgentToolResult<McpToolDetails>> => {
-  const { content, fullOutputPath } = await limitContent(
+  const { content, fullOutputPath } = await limitMcpContent(
     [{ type: "text", text: JSON.stringify(payload) }],
     writeOutputFile
   );
@@ -430,7 +427,7 @@ export const createResourceToolDefinitions = (options: {
         saveOutput: writeOutputFile,
       });
 
-      const { content, fullOutputPath } = await limitContent(
+      const { content, fullOutputPath } = await limitMcpContent(
         converted.length > 0
           ? converted
           : [{ type: "text", text: `Resource ${uri} is empty.` }],
