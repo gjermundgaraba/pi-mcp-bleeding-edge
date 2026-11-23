@@ -102,6 +102,11 @@ export default defineConfig({
       "typescript/method-signature-style": "off",
     },
   },
+  // Node does not strip types under node_modules, so hosts outside pi get the client built.
+  pack: {
+    entry: { client: "client.ts" },
+    dts: { generator: "tsgo" },
+  },
   staged: { "*": "vp check --fix" },
   test: {
     environment: "node",

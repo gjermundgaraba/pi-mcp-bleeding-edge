@@ -5,6 +5,7 @@ This repository is a pi extension that replaces pi's built-in MCP support with a
 ## Layout
 
 - `index.ts` registers the extension: `createMcpExtension(options)`, and the default export pi loads.
+- `client.ts` is the `/client` entry for hosts outside pi's session: `ServerConnection` and result conversion. It must not import pi-coding-agent or pi-tui; `vp pack` builds it to `dist/`, which the published package exports.
 - `config/` reads and edits `mcp.json`. pi-mcp's `validateMcpServerConfig` checks the shared `mcpServers` fields, as pi does; zod checks this extension's own (`exposure`, `toolExposure`, `protocol`, `auth`).
 - `connection/` owns one server's SDK client: connecting with era negotiation and the verdict cache, readiness (`start`, `settled`, `reconnect`), paged resource listing, error classification.
 - `oauth/` holds the per-server credential files, client identity choice, loopback callback, sign-in through the SDK's `auth()`, and the refresh-only auth of connections.
@@ -24,6 +25,7 @@ This repository is a pi extension that replaces pi's built-in MCP support with a
 
 - `vp install` installs dependencies.
 - `vp check` formats, lints, and type-checks; `vp check --fix` applies fixes. Review what `vp lint --fix-suggestions` changes before keeping it: it has rewritten behavior here before.
+- `vp pack` builds the `/client` entry. Publishing happens on a `v*` tag (`.github/workflows/npm.yml`), after bumping `version`.
 - `vp test` runs the `unit` and `integration` projects; `vp test --project unit` for one.
 
 ## Tests

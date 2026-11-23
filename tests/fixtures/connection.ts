@@ -73,11 +73,11 @@ export const connectFixture = (
   const toolListings: string[][] = [];
 
   const connection = new ServerConnection({
+    clientInfo: { name: "pi", version: "test" },
     entry: fixtureEntry(raw),
     cwd: dir,
-    verdictKey: "fixture",
     auth: undefined,
-    verdicts,
+    verdicts: { store: verdicts, key: "fixture" },
     log: new ServerLog(logFile),
     onTools: (current) => {
       toolListings.push(current.tools.map((tool) => tool.name));

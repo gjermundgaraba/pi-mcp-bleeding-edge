@@ -57,14 +57,15 @@ const setUp = async (): Promise<{
   const entry = fixtureEntry({ url: oauth.url });
 
   const connection = new ServerConnection({
+    clientInfo: { name: "pi", version: "test" },
     entry,
     cwd: dir,
-    verdictKey: "fixture",
     auth: auth.connectionAuth(entry),
-    verdicts: new ProtocolVerdicts(path.join(dir, "protocol.json")),
+    verdicts: {
+      store: new ProtocolVerdicts(path.join(dir, "protocol.json")),
+      key: "fixture",
+    },
     log: undefined,
-    onTools: () => undefined,
-    onChange: () => undefined,
   });
 
   cleanups.push(dispose, oauth.close, async () => {

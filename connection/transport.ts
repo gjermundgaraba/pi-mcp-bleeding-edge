@@ -1,12 +1,17 @@
 import path from "node:path";
 
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import type { AuthProvider, Transport } from "@modelcontextprotocol/client";
+import type {
+  AuthProvider,
+  FetchLike,
+  OAuthClientProvider,
+  Transport,
+} from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
-import type { ServerEntry } from "../config/load.ts";
 import { isHttpConfig } from "../config/schema.ts";
 import { expandHome, resolveConfigValues } from "../config/values.ts";
+import type { ServerTarget } from "./connection.ts";
 
 const inheritedEnvironment = (): Record<string, string> =>
   Object.fromEntries(
@@ -16,15 +21,22 @@ const inheritedEnvironment = (): Record<string, string> =>
   );
 
 /**
- * Streamable HTTP for `url` servers, with resolved headers and the connection's auth provider;
+ * Streamable HTTP for `url` servers, with resolved headers, the connection's auth provider and fetch;
  * a 403 asking for more scope is reported instead of re-authorizing, since sign-in is the user's.
  * Stdio for `command` servers, in pi's environment plus the resolved `env`, with `~` expanded
- * and a relative `cwd` resolved against the session's directory.
+ * and a relative `cwd` resolved against `cwd`, or the process's directory without one.
  */
 export const createTransport = (
-  entry: ServerEntry,
-  cwd: string,
-  auth: AuthProvider | undefined
+  entry: ServerTarget,
+  {
+    cwd,
+    auth,
+    fetch,
+  }: {
+    readonly cwd: string | undefined;
+    readonly auth: AuthProvider | OAuthClientProvider | undefined;
+    readonly fetch: FetchLike | undefined;
+  }
 ): Transport => {
   const { config, name } = entry;
 
@@ -38,6 +50,7 @@ export const createTransport = (
       requestInit: { headers },
       onInsufficientScope: "throw",
       ...(auth === undefined ? {} : { authProvider: auth }),
+      ...(fetch === undefined ? {} : { fetch }),
     });
   }
 
@@ -49,7 +62,7 @@ export const createTransport = (
   return new StdioClientTransport({
     command: expandHome(config.command),
     args: (config.args ?? []).map(expandHome),
-    cwd: path.resolve(cwd, expandHome(config.cwd ?? ".")),
+    cwd: path.resolve(cwd ?? "", expandHome(config.cwd ?? ".")),
     env: { ...inheritedEnvironment(), ...env },
     stderr: "pipe",
   });
