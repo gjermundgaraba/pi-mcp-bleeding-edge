@@ -15,7 +15,7 @@ Run `pi install npm:@gjermundgaraba/pi-mcp-bleeding-edge`. To run a checkout ins
 
 ## Use outside pi
 
-`@gjermundgaraba/pi-mcp-bleeding-edge/client` exports one server's connection (`ServerConnection`) and the conversion of tool results to model content, for hosts that manage their own servers and credentials. It needs neither pi-coding-agent nor pi-tui.
+`@gjermundgaraba/pi-mcp-bleeding-edge/client` exports one server's connection (`ServerConnection`), with its tools, resources, and skills (the MCP Skills extension: `skills`, `onSkills`, and `readSkill`, which verifies each file against the server's entry), and the conversion of tool results to model content, for hosts that manage their own servers and credentials. It needs neither pi-coding-agent nor pi-tui.
 
 ## Configuration
 

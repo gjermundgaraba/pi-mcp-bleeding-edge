@@ -1,7 +1,8 @@
 /**
  * The extension's MCP client without pi's session: one server's connection, with protocol era
- * negotiation, reconnects, and sign-in detection, and the conversion of its results to model
- * content. For hosts that manage their own servers and credentials, such as a pi-durable app.
+ * negotiation, reconnects, sign-in detection, and verified skill reads, and the conversion of its
+ * results to model content. For hosts that manage their own servers and credentials, such as a
+ * pi-durable app.
  */
 export { ServerConnection } from "./connection/connection.ts";
 
@@ -15,6 +16,10 @@ export type {
 } from "./connection/connection.ts";
 
 export { MODERN_PROTOCOL_VERSION, ProtocolVerdicts } from "./connection/era.ts";
+
+export { SkillVerificationError } from "@modelcontextprotocol/client/ext/skills";
+
+export type { Skill, SkillFile } from "@modelcontextprotocol/client/ext/skills";
 
 export { SignInRequiredError } from "./oauth/errors.ts";
 
