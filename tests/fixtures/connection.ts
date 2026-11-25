@@ -60,6 +60,8 @@ export interface ConnectionUnderTest {
   readonly verdicts: ProtocolVerdicts;
   readonly logFile: string;
   readonly toolListings: string[][];
+  /** The skill URIs of each listing `onSkills` reported. */
+  readonly skillListings: string[][];
 }
 
 export const connectFixture = (
@@ -71,6 +73,7 @@ export const connectFixture = (
 ): ConnectionUnderTest => {
   const logFile = path.join(dir, "mcp.log");
   const toolListings: string[][] = [];
+  const skillListings: string[][] = [];
 
   const connection = new ServerConnection({
     clientInfo: { name: "pi", version: "test" },
@@ -82,10 +85,13 @@ export const connectFixture = (
     onTools: (current) => {
       toolListings.push(current.tools.map((tool) => tool.name));
     },
+    onSkills: (current) => {
+      skillListings.push(current.skills.map((skill) => skill.uri));
+    },
     onChange: () => undefined,
   });
 
-  return { connection, verdicts, logFile, toolListings };
+  return { connection, verdicts, logFile, toolListings, skillListings };
 };
 
 /** Poll `check` until it holds, failing after `timeoutMs`. */

@@ -7,7 +7,7 @@ This repository is a pi extension that replaces pi's built-in MCP support with a
 - `index.ts` registers the extension: `createMcpExtension(options)`, and the default export pi loads.
 - `client.ts` is the `/client` entry for hosts outside pi's session: `ServerConnection` and result conversion. It must not import pi-coding-agent or pi-tui; `vp pack` builds it to `dist/`, which the published package exports.
 - `config/` reads and edits `mcp.json`. pi-mcp's `validateMcpServerConfig` checks the shared `mcpServers` fields, as pi does; zod checks this extension's own (`exposure`, `toolExposure`, `protocol`, `auth`).
-- `connection/` owns one server's SDK client: connecting with era negotiation and the verdict cache, readiness (`start`, `settled`, `reconnect`), paged resource listing, error classification.
+- `connection/` owns one server's SDK client: connecting with era negotiation and the verdict cache, readiness (`start`, `settled`, `reconnect`), paged resource listing, skill listing and verified skill reads, error classification.
 - `oauth/` holds the per-server credential files, client identity choice, loopback callback, sign-in through the SDK's `auth()`, and the refresh-only auth of connections.
 - `tools/` turns MCP tools, results, and resources into pi tools and renderers. Naming, output truncation, and input-schema normalization come from pi-mcp, so they match pi exactly.
 - `session/registry.ts` owns a session's servers: slots, connections, the tool catalog, and the enable, exposure, and reconnect actions. `session/controller.ts` holds the pi hooks: startup, waiting for servers, the `mcp_servers` prompt section, sign-ins.

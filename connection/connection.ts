@@ -1,6 +1,7 @@
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   Client,
@@ -24,6 +25,11 @@ import type {
   RequestOptions,
   Tool,
 } from "@modelcontextprotocol/client";
+import {
+  SkillsClient,
+  SkillVerificationError,
+} from "@modelcontextprotocol/client/ext/skills";
+import type { Skill, SkillFile } from "@modelcontextprotocol/client/ext/skills";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 import type { ServerEntry } from "../config/load.ts";
@@ -96,7 +102,9 @@ export interface ConnectionOptions {
   readonly log: ServerLog | undefined;
   /** Called when the server's tools were listed, at connect and after it announced a change. */
   readonly onTools?: ((connection: ServerConnection) => void) | undefined;
-  /** Called when `state`, `error`, or `tools` change. */
+  /** Called when the server's skills were listed, after each tool listing, or an entry was refreshed by `readSkill`. */
+  readonly onSkills?: ((connection: ServerConnection) => void) | undefined;
+  /** Called when `state`, `error`, `tools`, or `skills` change. */
   readonly onChange?: ((connection: ServerConnection) => void) | undefined;
 }
 
@@ -119,6 +127,11 @@ export class ServerConnection {
   state: ConnectionState = "connecting";
   error: string | undefined;
   tools: Tool[] = [];
+  /**
+   * The server's skills (the MCP Skills extension, SEP-2640), listed with the tools; none when the
+   * server does not declare the extension. Entries the SDK finds invalid are left out.
+   */
+  skills: Skill[] = [];
   /** Whether the server offers resources. They are listed on demand, since listing can take long. */
   hasResources = false;
   /** The server's instructions, describing its tools as a group. */
@@ -130,6 +143,7 @@ export class ServerConnection {
   private reconnecting: Promise<void> | undefined;
   private readonly shutdown = new AbortController();
   private stderrTail = "";
+  private skillListings = 0;
   private readonly options: ConnectionOptions;
 
   constructor(options: ConnectionOptions) {
@@ -314,6 +328,36 @@ export class ServerConnection {
 
         throw error;
       }
+    }, true);
+  }
+
+  /**
+   * Read the skill's `SKILL.md`, or the file at `ref` (a path under the skill's root or a URI the
+   * entry lists), checked against `entry`. When the check fails, the entry is fetched again with
+   * `skills/get` and the file read once more; a second failure throws `SkillVerificationError`.
+   */
+  async readSkill(
+    entry: Skill,
+    ref?: string,
+    options: CallOptions = {}
+  ): Promise<SkillFile> {
+    return await this.withClient(async (client) => {
+      const skills = new SkillsClient(client);
+      const request = this.requestOptions(options);
+
+      try {
+        return await skills.read(entry, ref, request);
+      } catch (error) {
+        if (!(error instanceof SkillVerificationError)) {
+          throw error;
+        }
+      }
+
+      const { skill } = await skills.get(entry.uri, request);
+
+      this.skillRefreshed(client, skill);
+
+      return await skills.read(skill, ref, request);
     }, true);
   }
 
@@ -577,6 +621,7 @@ export class ServerConnection {
       }
 
       this.connected(client, tools);
+      await this.listSkills(client);
 
       if (this.era === "modern") {
         void this.watchSubscription(client, client.autoOpenedSubscription);
@@ -657,8 +702,67 @@ export class ServerConnection {
     } else if (tools !== null) {
       this.tools = tools;
       this.options.onTools?.(this);
+      void this.listSkills(client);
     }
 
+    this.changed();
+  }
+
+  /**
+   * List the skills on `client`. A failure leaves the last listing in place and does not fail the
+   * connection, since its tools still work; a listing that a newer one overtook is dropped.
+   */
+  private async listSkills(client: Client): Promise<void> {
+    this.skillListings += 1;
+
+    const listing = this.skillListings;
+    let listed: Skill[] | undefined;
+    let failure = "";
+
+    try {
+      ({ skills: listed } = await new SkillsClient(client, {
+        skipInvalid: true,
+      }).list(undefined, {
+        timeout: this.timeoutMs,
+        signal: this.shutdown.signal,
+      }));
+    } catch (error) {
+      failure = errorMessage(error);
+    }
+
+    if (
+      listing !== this.skillListings ||
+      this.client !== client ||
+      this.closed
+    ) {
+      return;
+    }
+
+    if (listed === undefined) {
+      this.error = `Failed to list skills: ${failure}`;
+    } else {
+      this.skills = listed;
+      this.options.onSkills?.(this);
+    }
+
+    this.changed();
+  }
+
+  /** Put an entry `readSkill` fetched again in place of the listed one, when it changed. */
+  private skillRefreshed(client: Client, skill: Skill): void {
+    const index = this.skills.findIndex((listed) => listed.uri === skill.uri);
+
+    if (
+      index === -1 ||
+      isDeepStrictEqual(this.skills[index], skill) ||
+      this.client !== client ||
+      this.closed
+    ) {
+      return;
+    }
+
+    this.skills = this.skills.with(index, skill);
+    this.options.onSkills?.(this);
     this.changed();
   }
 

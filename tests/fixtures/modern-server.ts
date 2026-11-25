@@ -1,24 +1,61 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import type { RegisteredTool } from "@modelcontextprotocol/server";
+import {
+  SkillsExtension,
+  skillEntry,
+} from "@modelcontextprotocol/server/ext/skills";
 import { z } from "zod";
 
-/** Tools added and removed at runtime, shared by the instances of one server process. */
+/** Changes made at runtime, shared by the instances of one server process. */
 export interface FixtureState {
   readonly addedTools: string[];
   readonly removedTools: string[];
+  /** The files of the skill `greet`, by path under its folder. */
+  readonly skillFiles: Record<string, string>;
 }
+
+const SKILL_ROOT = "skill://greet/";
 
 export const fixtureState = (): FixtureState => ({
   addedTools: [],
   removedTools: [],
+  skillFiles: {
+    "SKILL.md":
+      "---\nname: greet\ndescription: Greet people\n---\nGreet in the tone of refs/tone.md.\n",
+    "refs/tone.md": "Warm.",
+  },
 });
+
+/** Serves the skill `greet` from `state`, so its entry follows the files as they change. */
+const greetSkill = (state: FixtureState): SkillsExtension => {
+  const entry = async () => await skillEntry("greet", state.skillFiles);
+
+  return new SkillsExtension({
+    source: {
+      list: async () => ({ skills: [await entry()] }),
+      get: async (uri) => {
+        const skill = await entry();
+
+        return skill.uri === uri ? skill : undefined;
+      },
+      read: async (uri) => {
+        const text = uri.startsWith(SKILL_ROOT)
+          ? state.skillFiles[uri.slice(SKILL_ROOT.length)]
+          : undefined;
+
+        return text === undefined ? undefined : { text };
+      },
+    },
+  });
+};
 
 /**
  * The test server on the v2 SDK, which serves 2026-07-28 and 2025-era clients: `echo`, `fail`,
  * `count` (with progress), `dash-name` and `dash_name` (whose pi names collide), `add-tool`,
- * `remove-tool`, and the resource `notes://first`. Adding and removing a tool changes this instance,
- * which notifies its own client, and `state` for later instances; `toolsChanged` publishes the change
- * for servers whose instances are per request.
+ * `remove-tool`, `edit-skill`, the resource `notes://first`, and the skill `greet` with the file
+ * `refs/tone.md`. Adding and removing a tool changes this instance, which notifies its own client,
+ * and `state` for later instances; `toolsChanged` publishes the change for servers whose instances
+ * are per request. `edit-skill` changes `refs/tone.md` without telling clients.
  */
 export const buildModernServer = (
   state: FixtureState,
@@ -120,6 +157,19 @@ export const buildModernServer = (
     }
   );
 
+  server.registerTool(
+    "edit-skill",
+    {
+      description: "Change the skill's bundled file",
+      inputSchema: z.object({ tone: z.string() }),
+    },
+    ({ tone }) => {
+      state.skillFiles["refs/tone.md"] = tone;
+
+      return { content: [{ type: "text", text: `tone is ${tone}` }] };
+    }
+  );
+
   for (const name of state.addedTools) {
     addTool(name);
   }
@@ -130,6 +180,8 @@ export const buildModernServer = (
     { mimeType: "text/plain", description: "The first note" },
     (uri) => ({ contents: [{ uri: uri.href, text: "hello from a resource" }] })
   );
+
+  greetSkill(state).attach(server);
 
   return server;
 };

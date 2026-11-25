@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
+import { SkillVerificationError } from "@modelcontextprotocol/client/ext/skills";
+import type { Skill } from "@modelcontextprotocol/client/ext/skills";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { MODERN_PROTOCOL_VERSION } from "../../connection/era.ts";
@@ -292,5 +295,83 @@ describe("ServerConnection over Streamable HTTP", () => {
     expect(
       textOf(await connection.callTool("echo", { text: "kept" }, {}))
     ).toBe("kept");
+  });
+});
+
+const greetUri = "skill://greet/SKILL.md";
+
+const sha256 = (text: string): string =>
+  `sha256:${createHash("sha256").update(text).digest("hex")}`;
+
+/** The digest the entry lists for the bundled file `refs/tone.md`. */
+const toneDigest = (skill: Skill | undefined): string | undefined => {
+  const files = skill?.resources;
+
+  return files === "dynamic"
+    ? undefined
+    : files?.find((file) => file.uri === "skill://greet/refs/tone.md")?.digest;
+};
+
+describe("ServerConnection skills", () => {
+  afterEach(cleanUp);
+
+  it.each([
+    { era: "modern", protocol: "auto" },
+    { era: "legacy", protocol: "legacy" },
+  ] as const)(
+    "lists, reads verified, and refreshes a changed skill on the $era era",
+    async ({ era, protocol }) => {
+      const dir = directory();
+      const url = await server(startModernHttpServer);
+
+      const { connection, skillListings } = track(
+        connectFixture(dir, { url, protocol })
+      );
+
+      await connection.getClient();
+
+      expect(connection.era).toBe(era);
+      expect(skillListings).toStrictEqual([[greetUri]]);
+
+      const [listed] = connection.skills;
+
+      expect(toneDigest(listed)).toBe(sha256("Warm."));
+
+      const skill = await connection.readSkill(listed!);
+
+      expect(skill).toMatchObject({
+        uri: greetUri,
+        verified: true,
+        frontmatter: { name: "greet", description: "Greet people" },
+        body: "Greet in the tone of refs/tone.md.\n",
+      });
+      await expect(
+        connection.readSkill(listed!, "refs/tone.md")
+      ).resolves.toMatchObject({ text: "Warm.", verified: true });
+
+      await connection.callTool("edit-skill", { tone: "Cool." }, {});
+
+      await expect(
+        connection.readSkill(listed!, "refs/tone.md")
+      ).resolves.toMatchObject({ text: "Cool.", verified: true });
+      expect(toneDigest(connection.skills[0])).toBe(sha256("Cool."));
+      expect(skillListings).toHaveLength(2);
+
+      await expect(
+        connection.readSkill(listed!, "refs/missing.md")
+      ).rejects.toBeInstanceOf(SkillVerificationError);
+    }
+  );
+
+  it("has no skills on a server without the extension", async () => {
+    const dir = directory();
+    const url = await server(startLegacyHttpServer);
+    const { connection, skillListings } = track(connectFixture(dir, { url }));
+
+    await connection.getClient();
+
+    expect(connection.skills).toStrictEqual([]);
+    expect(connection.error).toBeUndefined();
+    expect(skillListings).toStrictEqual([[]]);
   });
 });
