@@ -1,7 +1,6 @@
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 
 import {
   Client,
@@ -748,16 +747,11 @@ export class ServerConnection {
     this.changed();
   }
 
-  /** Put an entry `readSkill` fetched again in place of the listed one, when it changed. */
+  /** Put an entry `readSkill` fetched again in place of the listed one. */
   private skillRefreshed(client: Client, skill: Skill): void {
     const index = this.skills.findIndex((listed) => listed.uri === skill.uri);
 
-    if (
-      index === -1 ||
-      isDeepStrictEqual(this.skills[index], skill) ||
-      this.client !== client ||
-      this.closed
-    ) {
+    if (index === -1 || this.client !== client || this.closed) {
       return;
     }
 

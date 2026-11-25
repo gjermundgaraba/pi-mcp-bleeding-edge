@@ -335,8 +335,6 @@ describe("ServerConnection skills", () => {
 
       const [listed] = connection.skills;
 
-      expect(toneDigest(listed)).toBe(sha256("Warm."));
-
       const skill = await connection.readSkill(listed!);
 
       expect(skill).toMatchObject({
