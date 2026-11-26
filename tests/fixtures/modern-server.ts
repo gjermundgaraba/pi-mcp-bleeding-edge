@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { McpServer } from "@modelcontextprotocol/server";
 import type { RegisteredTool } from "@modelcontextprotocol/server";
 import {
@@ -109,6 +111,11 @@ export const buildModernServer = (
             });
           }
         }
+
+        // The SDK client hands notifications to their handlers a microtask later but settles a
+        // response at once, dropping the request's progress handler. A response that arrives in
+        // the same read as the last notifications would drop them, so let them go out first.
+        await sleep(50);
 
         return { content: [{ type: "text", text: `counted to ${to}` }] };
       }
