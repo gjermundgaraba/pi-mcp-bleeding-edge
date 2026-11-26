@@ -36,7 +36,7 @@
   "scripts": {
     "build": "vp pack",
     "prepare": "vp config",
-    "prepublishOnly": "vp run build"
+    "prepack": "vp run build"
   },
   "dependencies": {
     "@earendil-works/pi-mcp": "1.6.0",
