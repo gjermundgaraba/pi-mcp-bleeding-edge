@@ -23,5 +23,9 @@ jobs:
       - run: vp test
       - name: Check that the tag names the package version
         run: test "$(jq -r .version package.json)" = "${GITHUB_REF_NAME#v}"
-      # prepublishOnly builds dist; npm trusted publishing authenticates through the id-token.
-      - run: vp pm publish --no-git-checks
+      # pnpm packs (applying publishConfig) and npm publishes: pnpm's trusted-publishing token
+      # exchange gets a 404 for this scoped name, while npm's CLI exchanges the id-token itself.
+      # npm runs outside the checkout, whose devEngines names pnpm.
+      - run: vp run build && vp pm pack --pack-destination "$RUNNER_TEMP/package"
+      - run: npx --yes npm@12.2.3 publish ./*.tgz
+        working-directory: ${{ runner.temp }}/package

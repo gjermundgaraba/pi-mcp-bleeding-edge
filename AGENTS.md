@@ -25,7 +25,7 @@ This repository is a pi extension that replaces pi's built-in MCP support with a
 
 - `vp install` installs dependencies.
 - `vp check` formats, lints, and type-checks; `vp check --fix` applies fixes. Review what `vp lint --fix-suggestions` changes before keeping it: it has rewritten behavior here before.
-- `vp pack` builds the `/client` entry. Publishing happens on a `v*` tag (`.github/workflows/npm.yml`), after bumping `version`.
+- `vp pack` builds the `/client` entry. Publishing happens on a `v*` tag (`.github/workflows/npm.yml`), after bumping `version`: pnpm packs, and npm's CLI publishes the tarball with trusted publishing.
 - `vp test` runs the `unit` and `integration` projects; `vp test --project unit` for one.
 
 ## Tests
