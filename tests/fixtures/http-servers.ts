@@ -62,7 +62,12 @@ export const startModernHttpServer = async (): Promise<RunningServer> => {
 };
 
 /** A sessionful 2025-era server on the v1 SDK. */
-export const startLegacyHttpServer = async (): Promise<RunningServer> => {
+export const startLegacyHttpServer = async (): Promise<
+  RunningServer & {
+    /** Forget every session, as a restarted server would. */
+    readonly forgetSessions: () => void;
+  }
+> => {
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
   const server = createServer((request, response) => {
@@ -97,6 +102,9 @@ export const startLegacyHttpServer = async (): Promise<RunningServer> => {
 
   return {
     url: await listen(server),
+    forgetSessions: () => {
+      transports.clear();
+    },
     close: async () => {
       await Promise.all(
         [...transports.values()].map(async (transport) => {

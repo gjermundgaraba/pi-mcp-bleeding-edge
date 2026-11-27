@@ -296,6 +296,26 @@ describe("ServerConnection over Streamable HTTP", () => {
       textOf(await connection.callTool("echo", { text: "kept" }, {}))
     ).toBe("kept");
   });
+
+  it("retries calls on a new session when a 2025-era server forgot it", async () => {
+    const dir = directory();
+    const running = await startLegacyHttpServer();
+
+    cleanups.push(running.close);
+
+    const { connection } = track(connectFixture(dir, { url: running.url }));
+
+    await connection.getClient();
+    running.forgetSessions();
+
+    const results = await Promise.all(
+      ["one", "two"].map(
+        async (text) => await connection.callTool("echo", { text }, {})
+      )
+    );
+
+    expect(results.map(textOf)).toStrictEqual(["one", "two"]);
+  });
 });
 
 const greetUri = "skill://greet/SKILL.md";

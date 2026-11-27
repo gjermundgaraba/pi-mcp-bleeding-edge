@@ -16,19 +16,41 @@ export interface OAuthFixture {
   /** Reject every access token issued so far, as if they expired. */
   readonly expireAccessTokens: () => void;
   readonly tokenRequests: () => readonly string[];
+  /** Answer calls of the tool `name` with 403 insufficient_scope for `scope`. */
+  readonly requireScope: (name: string, scope: string) => void;
+  /** Hold calls of the tool `name` until `release`; `arrived` resolves when the first one does. */
+  readonly holdCalls: (name: string) => {
+    readonly arrived: Promise<undefined>;
+    readonly release: () => void;
+  };
   readonly close: () => Promise<void>;
 }
 
 const portOf = z.object({ port: z.number() });
 
-const readBody = async (request: IncomingMessage): Promise<URLSearchParams> => {
+const readBytes = async (request: IncomingMessage): Promise<Buffer> => {
   const chunks: Buffer[] = [];
 
   for await (const chunk of request) {
     chunks.push(Buffer.from(z.instanceof(Uint8Array).parse(chunk)));
   }
 
-  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+  return Buffer.concat(chunks);
+};
+
+const toolCall = z.object({
+  method: z.literal("tools/call"),
+  params: z.object({ name: z.string() }),
+});
+
+/** The tool a JSON-RPC request body calls, if it is a tool call. */
+const calledTool = (body: Buffer): string | undefined => {
+  try {
+    return toolCall.safeParse(JSON.parse(body.toString("utf8"))).data?.params
+      .name;
+  } catch {
+    return undefined;
+  }
 };
 
 const json = (
@@ -56,6 +78,16 @@ export const startOAuthServer = async (): Promise<OAuthFixture> => {
   const valid = new Set<string>();
   const refreshTokens = new Set<string>();
   const tokenRequests: string[] = [];
+  const requiredScopes = new Map<string, string>();
+
+  const holds = new Map<
+    string,
+    {
+      readonly arrived: PromiseWithResolvers<undefined>;
+      readonly held: PromiseWithResolvers<undefined>;
+    }
+  >();
+
   let base = "";
 
   const issue = () => {
@@ -143,7 +175,8 @@ export const startOAuthServer = async (): Promise<OAuthFixture> => {
       }
 
       case "/token": {
-        const body = await readBody(request);
+        const bytes = await readBytes(request);
+        const body = new URLSearchParams(bytes.toString("utf8"));
         const grant = body.get("grant_type") ?? "";
 
         tokenRequests.push(grant);
@@ -193,12 +226,36 @@ export const startOAuthServer = async (): Promise<OAuthFixture> => {
           return;
         }
 
+        const body = await readBytes(request);
+        const tool = calledTool(body);
+        const scope = requiredScopes.get(tool ?? "");
+
+        if (scope !== undefined) {
+          response
+            .writeHead(403, {
+              "www-authenticate": `Bearer error="insufficient_scope", scope="${scope}", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
+            })
+            .end();
+
+          return;
+        }
+
+        const hold = holds.get(tool ?? "");
+
+        if (hold !== undefined) {
+          hold.arrived.resolve(undefined);
+          await hold.held.promise;
+        }
+
         await mcp(
           {
             method: request.method ?? "GET",
             url: request.url ?? "/",
             headers: request.headers,
-            [Symbol.asyncIterator]: () => request[Symbol.asyncIterator](),
+            // The body was read to find the called tool, so hand the handler the bytes read.
+            async *[Symbol.asyncIterator]() {
+              yield body;
+            },
           },
           response
         );
@@ -227,6 +284,22 @@ export const startOAuthServer = async (): Promise<OAuthFixture> => {
       valid.clear();
     },
     tokenRequests: () => [...tokenRequests],
+    requireScope: (name, scope) => {
+      requiredScopes.set(name, scope);
+    },
+    holdCalls: (name) => {
+      const arrived = Promise.withResolvers<undefined>();
+      const held = Promise.withResolvers<undefined>();
+
+      holds.set(name, { arrived, held });
+
+      return {
+        arrived: arrived.promise,
+        release: () => {
+          held.resolve(undefined);
+        },
+      };
+    },
     close: async () => {
       const closed = once(server, "close");
 

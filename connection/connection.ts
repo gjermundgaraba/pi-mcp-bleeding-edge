@@ -140,6 +140,10 @@ export class ServerConnection {
   private client: Client | undefined;
   private opening: Promise<Client> | undefined;
   private reconnecting: Promise<void> | undefined;
+  /** The number of requests each client has in flight. */
+  private readonly inFlight = new Map<Client, number>();
+  /** Retired clients whose transports are closing. */
+  private readonly closing = new Set<Promise<void>>();
   private readonly shutdown = new AbortController();
   private stderrTail = "";
   private skillListings = 0;
@@ -212,7 +216,7 @@ export class ServerConnection {
       await this.opening?.catch(ignore);
 
       if (this.client !== undefined) {
-        await this.dropClient(this.client);
+        this.retire(this.client);
       }
 
       await this.getClient();
@@ -228,7 +232,7 @@ export class ServerConnection {
     await this.settled();
 
     if (this.client !== undefined) {
-      await this.dropClient(this.client);
+      this.retire(this.client);
     }
 
     if (!this.closed) {
@@ -247,10 +251,19 @@ export class ServerConnection {
     this.state = "closed";
     this.changed();
 
-    const { client } = this;
+    const clients = new Set(this.inFlight.keys());
+
+    if (this.client !== undefined) {
+      clients.add(this.client);
+    }
 
     this.client = undefined;
-    await Promise.all([client?.close().catch(ignore), this.settled()]);
+
+    for (const client of clients) {
+      this.closeClient(client);
+    }
+
+    await Promise.all([...this.closing, this.settled()]);
     await this.options.auth?.oauth?.settled();
   }
 
@@ -378,6 +391,8 @@ export class ServerConnection {
     for (let attempt = 1; ; attempt += 1) {
       const client = await this.getClient();
 
+      this.inFlight.set(client, (this.inFlight.get(client) ?? 0) + 1);
+
       try {
         return await run(client);
       } catch (error) {
@@ -388,12 +403,9 @@ export class ServerConnection {
 
         if (attempt === 1 && this.era === "legacy" && isSessionExpired(error)) {
           // A 2025-era server that forgot the session (restart, deploy) did not run the request, so
-          // retry once on a new session. The old client is detached, not closed: closing it would
-          // fail its other in-flight requests, which get the same 404 and retry the same way.
-          if (this.client === client) {
-            this.client = undefined;
-          }
-
+          // retry once on a new session. Its other requests in flight get the same 404 and retry
+          // the same way.
+          this.retire(client);
           continue;
         }
 
@@ -403,11 +415,30 @@ export class ServerConnection {
           throw error;
         }
 
-        await this.dropClient(client);
+        this.retire(client);
         this.markNeedsAuth(challenge);
 
         throw new Error(this.signInRequiredMessage(), { cause: error });
+      } finally {
+        this.settle(client);
       }
+    }
+  }
+
+  /** One request on `client` settled; a retired client closes after its last. */
+  private settle(client: Client): void {
+    const left = (this.inFlight.get(client) ?? 0) - 1;
+
+    if (left > 0) {
+      this.inFlight.set(client, left);
+
+      return;
+    }
+
+    this.inFlight.delete(client);
+
+    if (this.client !== client) {
+      this.closeClient(client);
     }
   }
 
@@ -436,12 +467,27 @@ export class ServerConnection {
     this.options.onChange?.(this);
   }
 
-  private async dropClient(client: Client): Promise<void> {
+  /**
+   * Stop handing `client` to new requests. It closes once its requests in flight settle, so a
+   * challenge or a reconnect does not fail calls whose tools may already have run.
+   */
+  private retire(client: Client): void {
     if (this.client === client) {
       this.client = undefined;
     }
 
-    await client.close().catch(ignore);
+    if (!this.inFlight.has(client)) {
+      this.closeClient(client);
+    }
+  }
+
+  private closeClient(client: Client): void {
+    const closing = client.close().catch(ignore);
+
+    this.closing.add(closing);
+    void closing.finally(() => {
+      this.closing.delete(closing);
+    });
   }
 
   private async open(): Promise<Client> {
