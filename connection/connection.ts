@@ -140,6 +140,8 @@ export class ServerConnection {
   private client: Client | undefined;
   private opening: Promise<Client> | undefined;
   private reconnecting: Promise<void> | undefined;
+  /** The number of requests each client has in flight; a detached client closes when it reaches 0. */
+  private readonly inFlight = new Map<Client, number>();
   private readonly shutdown = new AbortController();
   private stderrTail = "";
   private skillListings = 0;
@@ -247,10 +249,17 @@ export class ServerConnection {
     this.state = "closed";
     this.changed();
 
-    const { client } = this;
+    const clients = new Set(this.inFlight.keys());
+
+    if (this.client !== undefined) {
+      clients.add(this.client);
+    }
 
     this.client = undefined;
-    await Promise.all([client?.close().catch(ignore), this.settled()]);
+    await Promise.all([
+      ...[...clients].map(async (client) => await client.close().catch(ignore)),
+      this.settled(),
+    ]);
     await this.options.auth?.oauth?.settled();
   }
 
@@ -369,7 +378,8 @@ export class ServerConnection {
 
   /**
    * Run a request, connecting when needed. Read-only requests are retried once after a transient
-   * HTTP error; tool calls are not, since they may have run.
+   * HTTP error; tool calls are not, since they may have run. A client this detaches stays open for
+   * its other requests in flight and closes after the last one settles.
    */
   private async withClient<T>(
     run: (client: Client) => Promise<T>,
@@ -377,6 +387,8 @@ export class ServerConnection {
   ): Promise<T> {
     for (let attempt = 1; ; attempt += 1) {
       const client = await this.getClient();
+
+      this.inFlight.set(client, (this.inFlight.get(client) ?? 0) + 1);
 
       try {
         return await run(client);
@@ -388,12 +400,9 @@ export class ServerConnection {
 
         if (attempt === 1 && this.era === "legacy" && isSessionExpired(error)) {
           // A 2025-era server that forgot the session (restart, deploy) did not run the request, so
-          // retry once on a new session. The old client is detached, not closed: closing it would
-          // fail its other in-flight requests, which get the same 404 and retry the same way.
-          if (this.client === client) {
-            this.client = undefined;
-          }
-
+          // retry once on a new session. Its other requests in flight get the same 404 and retry
+          // the same way.
+          this.detach(client);
           continue;
         }
 
@@ -403,11 +412,30 @@ export class ServerConnection {
           throw error;
         }
 
-        await this.dropClient(client);
+        this.detach(client);
         this.markNeedsAuth(challenge);
 
         throw new Error(this.signInRequiredMessage(), { cause: error });
+      } finally {
+        await this.settle(client);
       }
+    }
+  }
+
+  /** One request on `client` settled; close it when it was detached and this was its last. */
+  private async settle(client: Client): Promise<void> {
+    const left = (this.inFlight.get(client) ?? 1) - 1;
+
+    if (left > 0) {
+      this.inFlight.set(client, left);
+
+      return;
+    }
+
+    this.inFlight.delete(client);
+
+    if (this.client !== client) {
+      await client.close().catch(ignore);
     }
   }
 
@@ -436,11 +464,15 @@ export class ServerConnection {
     this.options.onChange?.(this);
   }
 
-  private async dropClient(client: Client): Promise<void> {
+  /** Stop handing `client` to new requests. */
+  private detach(client: Client): void {
     if (this.client === client) {
       this.client = undefined;
     }
+  }
 
+  private async dropClient(client: Client): Promise<void> {
+    this.detach(client);
     await client.close().catch(ignore);
   }
 

@@ -133,6 +133,37 @@ describe("OAuth sign-in", () => {
     expect(auth.storedTokens(entry)).not.toBe(before);
   });
 
+  it("lets calls in flight finish when another call needs a wider scope", async () => {
+    const { auth, connection, entry, oauth } = await setUp();
+
+    await connection.getClient().catch(() => undefined);
+    await auth.signIn(
+      entry,
+      connection.challenge,
+      approvingBrowser(),
+      new AbortController().signal
+    );
+    await connection.reconnect();
+
+    const hold = oauth.holdCalls("echo");
+    const held = connection.callTool("echo", { text: "held" }, {});
+
+    await hold.arrived;
+    oauth.requireScope("fail", "admin");
+
+    await expect(connection.callTool("fail", {}, {})).rejects.toThrow(
+      /requires sign-in/u
+    );
+    expect(connection.state).toBe("needs-auth");
+    expect(connection.challenge?.scope).toBe("admin");
+
+    hold.release();
+
+    const result = await held;
+
+    expect(result.content[0]).toMatchObject({ text: "held" });
+  });
+
   it("signs out by deleting the stored credentials", async () => {
     const { auth, connection, entry } = await setUp();
 

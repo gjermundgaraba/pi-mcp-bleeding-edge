@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/pi-mcp-bleeding-edge",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Replaces pi's built-in MCP support with a client on the official MCP TypeScript SDK v2, speaking protocol 2026-07-28 and falling back to 2025-era servers.",
   "keywords": [
     "mcp",
