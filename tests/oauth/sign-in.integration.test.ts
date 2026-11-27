@@ -164,6 +164,31 @@ describe("OAuth sign-in", () => {
     expect(result.content[0]).toMatchObject({ text: "held" });
   });
 
+  it("lets calls in flight finish across a reconnect", async () => {
+    const { auth, connection, entry, oauth } = await setUp();
+
+    await connection.getClient().catch(() => undefined);
+    await auth.signIn(
+      entry,
+      connection.challenge,
+      approvingBrowser(),
+      new AbortController().signal
+    );
+    await connection.reconnect();
+
+    const hold = oauth.holdCalls("echo");
+    const held = connection.callTool("echo", { text: "held" }, {});
+
+    await hold.arrived;
+    await connection.reconnect();
+    hold.release();
+
+    const result = await held;
+
+    expect(result.content[0]).toMatchObject({ text: "held" });
+    expect(connection.state).toBe("connected");
+  });
+
   it("signs out by deleting the stored credentials", async () => {
     const { auth, connection, entry } = await setUp();
 

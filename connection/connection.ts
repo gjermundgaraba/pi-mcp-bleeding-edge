@@ -140,8 +140,10 @@ export class ServerConnection {
   private client: Client | undefined;
   private opening: Promise<Client> | undefined;
   private reconnecting: Promise<void> | undefined;
-  /** The number of requests each client has in flight; a detached client closes when it reaches 0. */
+  /** The number of requests each client has in flight. */
   private readonly inFlight = new Map<Client, number>();
+  /** Retired clients whose transports are closing. */
+  private readonly closing = new Set<Promise<void>>();
   private readonly shutdown = new AbortController();
   private stderrTail = "";
   private skillListings = 0;
@@ -214,7 +216,7 @@ export class ServerConnection {
       await this.opening?.catch(ignore);
 
       if (this.client !== undefined) {
-        await this.dropClient(this.client);
+        this.retire(this.client);
       }
 
       await this.getClient();
@@ -230,7 +232,7 @@ export class ServerConnection {
     await this.settled();
 
     if (this.client !== undefined) {
-      await this.dropClient(this.client);
+      this.retire(this.client);
     }
 
     if (!this.closed) {
@@ -256,10 +258,12 @@ export class ServerConnection {
     }
 
     this.client = undefined;
-    await Promise.all([
-      ...[...clients].map(async (client) => await client.close().catch(ignore)),
-      this.settled(),
-    ]);
+
+    for (const client of clients) {
+      this.closeClient(client);
+    }
+
+    await Promise.all([...this.closing, this.settled()]);
     await this.options.auth?.oauth?.settled();
   }
 
@@ -378,8 +382,7 @@ export class ServerConnection {
 
   /**
    * Run a request, connecting when needed. Read-only requests are retried once after a transient
-   * HTTP error; tool calls are not, since they may have run. A client this detaches stays open for
-   * its other requests in flight and closes after the last one settles.
+   * HTTP error; tool calls are not, since they may have run.
    */
   private async withClient<T>(
     run: (client: Client) => Promise<T>,
@@ -402,7 +405,7 @@ export class ServerConnection {
           // A 2025-era server that forgot the session (restart, deploy) did not run the request, so
           // retry once on a new session. Its other requests in flight get the same 404 and retry
           // the same way.
-          this.detach(client);
+          this.retire(client);
           continue;
         }
 
@@ -412,19 +415,19 @@ export class ServerConnection {
           throw error;
         }
 
-        this.detach(client);
+        this.retire(client);
         this.markNeedsAuth(challenge);
 
         throw new Error(this.signInRequiredMessage(), { cause: error });
       } finally {
-        await this.settle(client);
+        this.settle(client);
       }
     }
   }
 
-  /** One request on `client` settled; close it when it was detached and this was its last. */
-  private async settle(client: Client): Promise<void> {
-    const left = (this.inFlight.get(client) ?? 1) - 1;
+  /** One request on `client` settled; a retired client closes after its last. */
+  private settle(client: Client): void {
+    const left = (this.inFlight.get(client) ?? 0) - 1;
 
     if (left > 0) {
       this.inFlight.set(client, left);
@@ -435,7 +438,7 @@ export class ServerConnection {
     this.inFlight.delete(client);
 
     if (this.client !== client) {
-      await client.close().catch(ignore);
+      this.closeClient(client);
     }
   }
 
@@ -464,16 +467,27 @@ export class ServerConnection {
     this.options.onChange?.(this);
   }
 
-  /** Stop handing `client` to new requests. */
-  private detach(client: Client): void {
+  /**
+   * Stop handing `client` to new requests. It closes once its requests in flight settle, so a
+   * challenge or a reconnect does not fail calls whose tools may already have run.
+   */
+  private retire(client: Client): void {
     if (this.client === client) {
       this.client = undefined;
     }
+
+    if (!this.inFlight.has(client)) {
+      this.closeClient(client);
+    }
   }
 
-  private async dropClient(client: Client): Promise<void> {
-    this.detach(client);
-    await client.close().catch(ignore);
+  private closeClient(client: Client): void {
+    const closing = client.close().catch(ignore);
+
+    this.closing.add(closing);
+    void closing.finally(() => {
+      this.closing.delete(closing);
+    });
   }
 
   private async open(): Promise<Client> {

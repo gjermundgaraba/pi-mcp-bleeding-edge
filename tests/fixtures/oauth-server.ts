@@ -82,7 +82,10 @@ export const startOAuthServer = async (): Promise<OAuthFixture> => {
 
   const holds = new Map<
     string,
-    { arrive: () => void; held: Promise<undefined> }
+    {
+      readonly arrived: PromiseWithResolvers<undefined>;
+      readonly held: PromiseWithResolvers<undefined>;
+    }
   >();
 
   let base = "";
@@ -240,8 +243,8 @@ export const startOAuthServer = async (): Promise<OAuthFixture> => {
         const hold = holds.get(tool ?? "");
 
         if (hold !== undefined) {
-          hold.arrive();
-          await hold.held;
+          hold.arrived.resolve(undefined);
+          await hold.held.promise;
         }
 
         await mcp(
@@ -288,12 +291,7 @@ export const startOAuthServer = async (): Promise<OAuthFixture> => {
       const arrived = Promise.withResolvers<undefined>();
       const held = Promise.withResolvers<undefined>();
 
-      holds.set(name, {
-        arrive: () => {
-          arrived.resolve(undefined);
-        },
-        held: held.promise,
-      });
+      holds.set(name, { arrived, held });
 
       return {
         arrived: arrived.promise,
